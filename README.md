@@ -17,7 +17,7 @@
 
 ## 技术栈
 
-- **语言**：Rust edition 2024，MSRV 1.90
+- **语言**：Rust edition 2024，MSRV 1.98.1
 - **UI**：`gpui-pre` 0.3.8（Zed main 的快照分叉）+ `gpui-component` 0.7.1（输入框 / 菜单 / 浮层）
 - **音频输出**：`rodio` + `cpal`
 - **解码**：`symphonia` 0.6 全格式
@@ -46,7 +46,7 @@
 
 ## 快速上手开发
 
-需要 Rust 1.90 以上。首次构建要编译整棵 GPUI 依赖树（888 个包），几分钟后增量很快。
+需要 Rust 1.98.1 以上。首次构建要编译整棵 GPUI 依赖树（888 个包），几分钟后增量很快。
 
 ```bash
 cargo run -p lyre-app                # 启动
@@ -72,7 +72,7 @@ cargo t    # test
 
 ```bash
 cargo doc --workspace --no-deps                    # CI 不执行，intra-doc 链接坏了只有这里报
-LYRE_DEBUG_IMPORT="D:/some/dir" cargo run -p lyre-app   # 换一批测试素材
+LYRE_DEBUG_IMPORT="<path-to-file>" cargo run -p lyre-app   # 换一批测试素材
 ```
 
 用户数据在 `%APPDATA%\Lyre\`（macOS `~/Library/Application Support/Lyre`，Linux `$XDG_DATA_HOME/Lyre`）：
