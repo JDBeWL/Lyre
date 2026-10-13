@@ -537,25 +537,21 @@ impl SearchPage {
                 });
             })
             .child(
-                div()
-                    .relative()
-                    .flex_none()
-                    .child(cover)
-                    .child(
-                        div()
-                            .absolute()
-                            .right(px(theme::GAP_SM))
-                            .bottom(px(theme::GAP_SM))
-                            .size(px(36.))
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .rounded_full()
-                            .bg(theme::control())
-                            .border(px(2.))
-                            .border_color(theme::bg())
-                            .child(icon(Glyph::Play, 16., theme::text_on_control())),
-                    ),
+                div().relative().flex_none().child(cover).child(
+                    div()
+                        .absolute()
+                        .right(px(theme::GAP_SM))
+                        .bottom(px(theme::GAP_SM))
+                        .size(px(36.))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .rounded_full()
+                        .bg(theme::control())
+                        .border(px(2.))
+                        .border_color(theme::bg())
+                        .child(icon(Glyph::Play, 16., theme::text_on_control())),
+                ),
             )
             .child(
                 div()
