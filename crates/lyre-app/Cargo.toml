@@ -1,0 +1,18 @@
+[package]
+name = "lyre-app"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Lyre binary entry point."
+
+[[bin]]
+name = "lyre"
+path = "src/main.rs"
+
+[dependencies]
+lyre-ui = { workspace = true }
+log = "0.4"
+
+[lints]
+workspace = true

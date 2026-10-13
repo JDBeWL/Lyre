@@ -1,0 +1,4 @@
+# 统一行尾为 LF，保证 CI 上 `cargo fmt --check` 跨平台稳定。
+# core.autocrlf=true 只影响 checkout，本文件让工作区与仓库一致使用 LF。
+* text=auto eol=lf
+*.rs text eol=lf

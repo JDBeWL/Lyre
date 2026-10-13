@@ -1,0 +1,21 @@
+[package]
+name = "lyre-audio"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Audio engine for Lyre. Exclusive playback thread, symphonia decoding, lock-free progress snapshot."
+
+[dependencies]
+lyre-core = { workspace = true }
+rodio = { version = "0.22", default-features = false, features = ["playback"] }
+symphonia = { version = "0.6", features = ["all"] }
+crossbeam-channel = "0.5"
+thiserror = { workspace = true }
+log = "0.4"
+
+[dev-dependencies]
+tempfile = "3"
+
+[lints]
+workspace = true

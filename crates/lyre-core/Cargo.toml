@@ -1,0 +1,25 @@
+[package]
+name = "lyre-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Domain model for Lyre: tracks, playlists and directory scanning. Zero UI, zero audio."
+
+[dependencies]
+serde = { workspace = true }
+thiserror = { workspace = true }
+walkdir = { workspace = true }
+lofty = "0.24"
+# 只服务于 `.lrc`：中文发行里 GBK/GB18030 编码的歌词文件仍常见
+encoding_rs = "0.8"
+
+[dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[[bench]]
+name = "group"
+harness = false
+
+[lints]
+workspace = true

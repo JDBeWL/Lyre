@@ -1,0 +1,46 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.90"
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Format check
+        run: cargo fmt --all --check
+
+      - name: GPUI fork isolation check
+        shell: bash
+        run: |
+          # gpui 的名字只允许出现在 platform.rs。第二处直接 use gpui 会在换分叉或升级时
+          # 解析出两份 gpui 并存、类型对不上，而报错信息指不到根因。
+          bad=$(grep -rnE '\bgpui(_component)?\b' crates --include='*.rs' \
+                | grep -v '^crates/lyre-ui/src/platform.rs:' \
+                | grep -vE '^[^:]+:[0-9]+:[[:space:]]*//' || true)
+          if [ -n "$bad" ]; then
+            echo "GPUI 隔离被破坏，这些位置应改用 use crate::platform::*："
+            echo "$bad"
+            exit 1
+          fi
+
+      - name: clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Tests
+        run: cargo test --workspace

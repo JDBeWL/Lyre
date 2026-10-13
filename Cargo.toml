@@ -1,0 +1,78 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/lyre-core",
+    "crates/lyre-audio",
+    "crates/lyre-ui",
+    "crates/lyre-app",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.90"
+license = "MIT OR Apache-2.0"
+
+[workspace.dependencies]
+lyre-core = { path = "crates/lyre-core" }
+lyre-audio = { path = "crates/lyre-audio" }
+lyre-ui = { path = "crates/lyre-ui" }
+
+thiserror = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+walkdir = "2"
+
+# gpui-pre 是 Zed main 的快照分叉，为的是 gpui-component 的 Input（中文 IME）/Menu/Popover。
+# 必须钉 `=0.3.8`：gpui-component 钉死了它，放开会解析出两份 gpui 而类型不匹配。
+gpui = { package = "gpui-pre", version = "=0.3.8" }
+gpui-platform = { package = "gpui-pre-platform", version = "=0.3.8" }
+gpui-component = "0.7.1"
+
+# 各 crate 用 `[lints] workspace = true` 继承。`[workspace.lints]` 不作用于 vendor/ 下的补丁包。
+[workspace.lints.rust]
+unsafe_code = "forbid"
+rust_2018_idioms = { level = "warn", priority = -1 }
+elided_lifetimes_in_paths = "allow"
+unused_lifetimes = "warn"
+
+[workspace.lints.clippy]
+# 分组给负 priority，下面的单条规则才覆盖得住它们
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+unwrap_used = "warn"
+expect_used = "warn"
+clone_on_ref_ptr = "warn"
+needless_pass_by_value = "warn"
+too_many_arguments = "allow"      # GPUI 的渲染工厂签名，如 common/cover.rs::list_cover
+module_name_repetitions = "allow" # Sidebar / SidebarState、LibraryEntity / LibraryEvent
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+# 生产侧的浮点比较都是「已 clamp 的值按位变没变」，换成误差区间会漏掉本该有的重绘
+float_cmp = "allow"
+# 布局数学的像素值来自布局树、范围已知，`as` 是刻意的取值方式
+cast_possible_truncation = "allow"
+cast_precision_loss = "allow"
+cast_sign_loss = "allow"
+unreadable_literal = "allow"
+wildcard_imports = "allow"
+too_many_lines = "allow"
+must_use_candidate = "allow"
+return_self_not_must_use = "allow"
+
+# GPUI 的渲染管线在纯 debug 下交互明显发滞，依赖统一开 opt-level=2。
+[profile.dev.package."*"]
+opt-level = 2
+
+[profile.dev]
+opt-level = 1
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true
+
+# vendor 的 gpui-pre-windows：上游只给无标题栏窗口注册了顶边缩放热区，补丁补齐四边四角、
+# 把缩放交还给系统。改了什么、换版本怎么重做见 vendor/gpui-pre-windows/PATCH.md。
+[patch.crates-io]
+gpui-pre-windows = { path = "vendor/gpui-pre-windows" }

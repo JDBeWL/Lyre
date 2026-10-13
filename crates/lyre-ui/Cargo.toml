@@ -1,0 +1,32 @@
+[package]
+name = "lyre-ui"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "GPUI view layer for Lyre: entities, components and theming."
+
+[dependencies]
+lyre-core = { workspace = true }
+lyre-audio = { workspace = true }
+gpui = { workspace = true }
+gpui-platform = { workspace = true }
+gpui-component = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+# release 下没有控制台（windows_subsystem="windows"），日志必须落文件，见 src/logging.rs
+log = "0.4"
+# 持久化层要给出可区分的错误，见 src/persist/error.rs
+thiserror = { workspace = true }
+# 只为「按时间问候」取本地小时数；gpui 已依赖 chrono，不新增依赖树。
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+image = { version = "0.25", default-features = false, features = [
+    "jpeg",
+    "png",
+    "webp",
+    "gif",
+    "bmp",
+] }
+
+[lints]
+workspace = true
