@@ -23,6 +23,10 @@ pub enum PlayerCommand {
     },
     /// 换设备时是否交叉淡化。设置项活在 UI 线程、后端活在音频线程，只能这样送过来。
     SetSmoothSwitch(bool),
+    /// 切换输出模式（共享 / WASAPI 独占）。独占与共享在同一台设备上互斥，切换会重开输出流。
+    SetOutputMode {
+        exclusive: bool,
+    },
     /// 让音频线程退出。由 `AudioHandle::drop` 发出。
     Shutdown,
 }

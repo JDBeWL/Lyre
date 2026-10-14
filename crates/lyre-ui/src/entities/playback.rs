@@ -5,8 +5,10 @@ use std::sync::mpsc::{self, TryRecvError};
 use std::time::Duration;
 
 use lyre_audio::{
-    AudioDeviceInfo, AudioHandle, PlaybackState, PlayerCommand, PlayerEvent, Snapshot,
+    AudioBackend, AudioDeviceInfo, AudioError, AudioHandle, OutputMode, PlaybackState,
+    PlayerCommand, PlayerEvent, Snapshot,
 };
+use lyre_audio_exclusive::ExclusiveBackend;
 use lyre_core::Track;
 
 use crate::platform::*;
@@ -25,8 +27,22 @@ pub enum PlaybackEvent {
     VolumeChanged,
     /// 可用设备列表或当前输出设备变了
     DevicesChanged,
+    /// 实际生效的输出模式（或独占协商到的格式）变了
+    OutputModeChanged,
     /// 一首歌自然播完了 —— 由上层决定下一曲还是循环
     Finished,
+}
+
+/// 独占后端的构造入口。
+///
+/// `lyre-audio` 不能依赖 `lyre-audio-exclusive`（后者要复用前者的解码链，反向依赖会成环），
+/// 所以工厂只能由装配层注入进去。
+fn exclusive_factory() -> lyre_audio::ExclusiveOpenFn {
+    Box::new(|device| {
+        ExclusiveBackend::open(device)
+            .map(|backend| Box::new(backend) as Box<dyn AudioBackend>)
+            .map_err(|err| AudioError::Exclusive(err.to_string()))
+    })
 }
 
 pub struct PlaybackEntity {
@@ -48,6 +64,12 @@ pub struct PlaybackEntity {
     device_name: String,
     /// 已经下发给音频线程的换设备平滑开关；`false` 与音频线程的初值一致。
     smooth_switch: bool,
+    /// 已经下发给音频线程的独占开关。
+    exclusive_wanted: bool,
+    /// 实际生效的输出模式。
+    output_mode: OutputMode,
+    /// 独占协商到的口径，由音频线程报上来。
+    output_detail: String,
 
     /// 事件泵。持有它任务才不会被提前中断。
     _pump: Task<()>,
@@ -60,15 +82,16 @@ impl PlaybackEntity {
         let (tx, rx) = mpsc::channel();
         // 线程起不来（资源耗尽）不是致命错误：退化成没声音但界面可用，原因留在 `error` 里显示。
         let mut startup_error = None;
-        let handle = match AudioHandle::spawn(tx, initial_device) {
-            Ok(handle) => Some(handle),
-            Err(err) => {
-                let message = err.to_string();
-                log::error!("音频线程创建失败，本次运行将没有声音：{message}");
-                startup_error = Some(message);
-                None
-            }
-        };
+        let handle =
+            match AudioHandle::spawn_with_exclusive(tx, initial_device, exclusive_factory()) {
+                Ok(handle) => Some(handle),
+                Err(err) => {
+                    let message = err.to_string();
+                    log::error!("音频线程创建失败，本次运行将没有声音：{message}");
+                    startup_error = Some(message);
+                    None
+                }
+            };
         // 设备列表不会主动推给一个还没问过的新句柄，先要一份，否则菜单在首次插拔前一直是空的
         if let Some(handle) = &handle {
             handle.send(PlayerCommand::EnumerateDevices);
@@ -144,6 +167,9 @@ impl PlaybackEntity {
             device: None,
             device_name: String::new(),
             smooth_switch: false,
+            exclusive_wanted: false,
+            output_mode: OutputMode::Shared,
+            output_detail: String::new(),
             _pump: pump,
         }
     }
@@ -277,6 +303,25 @@ impl PlaybackEntity {
         self.send(PlayerCommand::SetSmoothSwitch(enabled));
     }
 
+    /// 是否用 WASAPI 独占输出。独占起不来时音频线程会自己退回共享并发回事件。
+    pub fn set_exclusive_output(&mut self, exclusive: bool) {
+        if self.exclusive_wanted == exclusive {
+            return;
+        }
+        self.exclusive_wanted = exclusive;
+        self.send(PlayerCommand::SetOutputMode { exclusive });
+    }
+
+    /// 实际生效的输出模式。与开关的期望值可能不同：独占协商失败会退回共享。
+    pub const fn output_mode(&self) -> OutputMode {
+        self.output_mode
+    }
+
+    /// 独占协商到的口径（采样率 / 声道 / 位深）；共享模式或尚未协商到时为空串。
+    pub fn output_detail(&self) -> &str {
+        &self.output_detail
+    }
+
     fn apply(&mut self, event: PlayerEvent, emitted: &mut Vec<PlaybackEvent>) {
         match event {
             PlayerEvent::Loaded { duration, .. } => {
@@ -314,6 +359,15 @@ impl PlaybackEntity {
                 self.device = id;
                 self.device_name = name;
                 emitted.push(PlaybackEvent::DevicesChanged);
+            }
+
+            PlayerEvent::OutputModeChanged { mode, detail } => {
+                // 口径会在切歌、换设备时重协商，值没变就不必惊动界面
+                if self.output_mode != mode || self.output_detail != detail {
+                    self.output_mode = mode;
+                    self.output_detail = detail;
+                    emitted.push(PlaybackEvent::OutputModeChanged);
+                }
             }
 
             PlayerEvent::Error(message) => {

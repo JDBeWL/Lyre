@@ -45,4 +45,10 @@ pub trait AudioBackend: 'static {
     /// 每拍调用一次，让后端处理需要时间的收尾（淡出、挂起的交接）。
     /// 默认无操作，注入式假后端不必实现。
     fn tick(&mut self) {}
+
+    /// 后端对自己输出口径的描述，供界面展示。独占返回协商到的采样率/声道/位深，
+    /// 共享模式返回空串 —— 那边口径由系统混音器决定，报出来也没意义。
+    fn describe_output(&self) -> String {
+        String::new()
+    }
 }

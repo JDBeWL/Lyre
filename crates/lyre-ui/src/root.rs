@@ -75,6 +75,8 @@ impl RootView {
         });
         // 静音退出时以 0 起播，但存档里留的是静音前的值（见 `VolumeControl::persist`）
         playback.update(cx, |playback, cx| {
+            // 输出模式先定：它决定后面第一次开流走哪条后端
+            playback.set_exclusive_output(stored.exclusive_output);
             playback.set_volume(if stored.muted { 0.0 } else { stored.volume }, cx);
             playback.set_smooth_switch(stored.smooth_device_switch);
         });
@@ -163,7 +165,10 @@ impl RootView {
                     resume::save_resume(&this.playback, &this.settings, cx);
                 }
                 // 设备列表由底栏自己订阅刷新，根视图不关心
-                PlaybackEvent::VolumeChanged | PlaybackEvent::DevicesChanged => {}
+                // 输出模式与设备列表分别由设置面板、底栏自己订阅刷新
+                PlaybackEvent::VolumeChanged
+                | PlaybackEvent::DevicesChanged
+                | PlaybackEvent::OutputModeChanged => {}
             }
         });
 

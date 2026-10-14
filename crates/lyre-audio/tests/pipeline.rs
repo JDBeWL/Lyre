@@ -6,13 +6,14 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering::Relaxed};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, channel};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use lyre_audio::{
-    AudioBackend, AudioError, AudioHandle, PlaybackState, PlayerCommand, PlayerEvent, Result,
+    AudioBackend, AudioError, AudioHandle, OutputMode, PlaybackState, PlayerCommand, PlayerEvent,
+    Result,
 };
 
 #[derive(Default)]
@@ -20,6 +21,10 @@ struct FakeState {
     finished: AtomicBool,
     position_ms: AtomicU64,
     volume_bits: AtomicU32,
+    /// 后端收到的 `set_device` 参数，按调用顺序。
+    device_calls: Mutex<Vec<Option<String>>>,
+    /// `describe_output` 要报的口径，由用例摆布。
+    reported: Mutex<String>,
 }
 
 /// 不碰声卡的后端。行为完全由测试摆布。
@@ -71,6 +76,32 @@ impl AudioBackend for FakeBackend {
 
     fn is_finished(&self) -> bool {
         self.state.finished.load(Relaxed)
+    }
+
+    fn set_device(&mut self, device: Option<&str>) -> Result<()> {
+        self.state
+            .device_calls
+            .lock()
+            .unwrap()
+            .push(device.map(str::to_owned));
+        Ok(())
+    }
+
+    /// 最近一次被告知的目标设备，与真实后端同语义（`None` 表示跟随默认）。
+    fn current_device(&self) -> Option<String> {
+        self.state
+            .device_calls
+            .lock()
+            .unwrap()
+            .last()
+            .cloned()
+            .flatten()
+    }
+
+    /// 真实的 `RodioBackend` 在共享模式返回空串，这里由用例摆布 —— 用来验证
+    /// 控制线程有没有把后端的口径变化如实播报出去。
+    fn describe_output(&self) -> String {
+        self.state.reported.lock().unwrap().clone()
     }
 }
 
@@ -189,7 +220,7 @@ fn seek_is_reflected_in_snapshot_immediately() {
 
 #[test]
 fn volume_updates_event_and_snapshot_and_clamps() {
-    let (handle, rx, state) = harness();
+    let (handle, rx, _state) = harness();
 
     handle.send(PlayerCommand::SetVolume(0.35));
     let event = wait_for(&rx, |e| matches!(e, PlayerEvent::Volume(_))).expect("应当收到音量事件");
@@ -202,10 +233,32 @@ fn volume_updates_event_and_snapshot_and_clamps() {
         std::thread::sleep(Duration::from_millis(10));
     }
     assert_eq!(handle.volume(), 1.0, "越界音量应当被夹住");
-    assert_eq!(
-        f32::from_bits(state.volume_bits.load(Relaxed)),
-        1.0,
-        "后端收到的也应当是夹过的值"
+}
+
+#[test]
+fn a_volume_set_before_the_device_opens_still_reaches_the_backend() {
+    let (handle, rx, state) = harness();
+
+    // 启动时下发存档音量是最早的命令之一，那时设备还没打开（后端是懒创建的）
+    handle.send(PlayerCommand::SetVolume(0.35));
+    wait_for(&rx, |e| matches!(e, PlayerEvent::Volume(_))).expect("应当收到音量事件");
+    assert_eq!(state.volume_bits.load(Relaxed), 0, "调音量本身不该去开设备");
+
+    // 真正装载时才开设备，此时必须把当前音量补发给新后端，否则第一首会以满音量出声
+    handle.send(PlayerCommand::Load {
+        path: PathBuf::from("/music/夢我夢中.flac"),
+        autoplay: true,
+    });
+    wait_for(&rx, |e| matches!(e, PlayerEvent::Loaded { .. })).expect("应当收到 Loaded");
+
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while state.volume_bits.load(Relaxed) == 0 && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let received = f32::from_bits(state.volume_bits.load(Relaxed));
+    assert!(
+        (received - 0.35).abs() < f32::EPSILON,
+        "后端拿到的音量应当是先前设的那个，实际 {received}"
     );
 }
 
@@ -397,6 +450,39 @@ fn smooth_switch_setting_does_not_disturb_playback() {
 }
 
 #[test]
+fn asking_for_exclusive_without_a_backend_falls_back_and_says_so() {
+    let (handle, rx, _state) = harness();
+
+    handle.send(PlayerCommand::Load {
+        path: PathBuf::from("/music/夢我夢中.flac"),
+        autoplay: true,
+    });
+    wait_for(&rx, |e| matches!(e, PlayerEvent::Loaded { .. }));
+
+    // 注入式假后端没有独占实现：要独占必须如实退回共享，而不是让开关看起来生效了。
+    // 两条事件按「先报原因、再报结果」的顺序发出，所以这里也按同样的顺序收。
+    handle.send(PlayerCommand::SetOutputMode { exclusive: true });
+
+    let event = wait_for(&rx, |e| matches!(e, PlayerEvent::Error(_))).expect("降级要让人知道原因");
+    match event {
+        PlayerEvent::Error(message) => assert!(message.contains("独占"), "{message}"),
+        _ => unreachable!(),
+    }
+
+    let event = wait_for(&rx, |e| matches!(e, PlayerEvent::OutputModeChanged { .. }))
+        .expect("切输出模式应当有回执");
+    match event {
+        PlayerEvent::OutputModeChanged { mode, .. } => {
+            assert_eq!(mode, OutputMode::Shared, "没有独占后端时不该报成独占");
+        }
+        _ => unreachable!(),
+    }
+
+    // 关键：正在播的那条流不能因为一次失败的切换就断掉
+    assert_eq!(handle.snapshot().state(), PlaybackState::Playing);
+}
+
+#[test]
 fn dropping_the_handle_shuts_the_thread_down() {
     let (handle, rx, _state) = harness();
     handle.send(PlayerCommand::Load {
@@ -421,4 +507,74 @@ fn dropping_the_handle_shuts_the_thread_down() {
         }
     }
     assert!(disconnected, "句柄析构之后音频线程应当收工");
+}
+
+#[test]
+fn a_device_that_is_not_present_falls_back_instead_of_pretending() {
+    let (handle, rx, state) = harness();
+
+    // 先把后端建起来 —— 真实的插拔总是发生在流已经开着的时候
+    handle.send(PlayerCommand::Load {
+        path: PathBuf::from("/music/夢我夢中.flac"),
+        autoplay: true,
+    });
+    wait_for(&rx, |e| matches!(e, PlayerEvent::Loaded { .. })).expect("应当收到 Loaded");
+
+    // 从菜单里选不到不存在的设备，但存档里的标识会失效（换机器、换驱动、设备已拔出），
+    // 恢复设置时就会走到这条路上。此时必须退回默认设备，而不是对着不存在的标识干等。
+    handle.send(PlayerCommand::SetDevice {
+        id: Some("wasapi:{0.0.0.00000000}.{no-such-endpoint}".to_owned()),
+    });
+
+    let event = wait_for(&rx, |e| matches!(e, PlayerEvent::DeviceChanged { .. }))
+        .expect("切换设备应当有回执");
+    match event {
+        PlayerEvent::DeviceChanged { id, .. } => {
+            assert_eq!(id, None, "设备不存在时不该报成已经切过去了");
+        }
+        _ => unreachable!(),
+    }
+
+    assert_eq!(
+        *state.device_calls.lock().unwrap(),
+        vec![None],
+        "该把「跟随默认」下发给后端，而不是那台不存在的设备"
+    );
+}
+
+#[test]
+fn the_backend_output_detail_is_announced_after_every_load() {
+    let (handle, rx, state) = harness();
+
+    // 第一条 Load 会把后端建起来，创建时报一次口径（假后端此刻报的是空串）
+    handle.send(PlayerCommand::Load {
+        path: PathBuf::from("/music/夢我夢中.flac"),
+        autoplay: true,
+    });
+    wait_for(&rx, |e| matches!(e, PlayerEvent::Loaded { .. })).expect("应当收到 Loaded");
+    wait_for(&rx, |e| matches!(e, PlayerEvent::OutputModeChanged { .. }))
+        .expect("创建后端时应当报一次输出模式");
+
+    // 模拟一次重新协商：独占会按新曲目的声源口径重开流，报出来的口径跟着变。
+    // 只在创建后端时报一次的话，界面上会一直停在第一首的口径上，看着像「切歌没重新协商」。
+    *state.reported.lock().unwrap() = "44100 Hz / 2 声道 / 32-bit int".to_owned();
+    handle.send(PlayerCommand::Load {
+        path: PathBuf::from("/music/夏の終わり.flac"),
+        autoplay: true,
+    });
+
+    let event = wait_for(&rx, |e| {
+        matches!(
+            e,
+            PlayerEvent::OutputModeChanged { detail, .. }
+                if detail == "44100 Hz / 2 声道 / 32-bit int"
+        )
+    })
+    .expect("装载之后应当把新的输出口径报上来");
+    match event {
+        PlayerEvent::OutputModeChanged { mode, .. } => {
+            assert_eq!(mode, OutputMode::Shared, "假后端走的是共享路径");
+        }
+        _ => unreachable!(),
+    }
 }

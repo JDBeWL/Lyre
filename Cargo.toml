@@ -3,6 +3,8 @@ resolver = "2"
 members = [
     "crates/lyre-core",
     "crates/lyre-audio",
+    "crates/lyre-audio-simd",
+    "crates/lyre-audio-exclusive",
     "crates/lyre-ui",
     "crates/lyre-app",
 ]

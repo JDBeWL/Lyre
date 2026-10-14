@@ -34,6 +34,8 @@ pub struct Settings {
     /// 换设备时让旧输出流淡出、新流淡入，把重建链路的空窗盖掉。
     /// 默认关：两路短暂并存时可能有轻微的相位抵消，听感不合就还是硬切干净。
     pub smooth_device_switch: bool,
+    /// 用 WASAPI 独占输出。默认关：独占会占住设备，其它程序一起听不到声音。
+    pub exclusive_output: bool,
 }
 
 impl Default for Settings {
@@ -50,6 +52,7 @@ impl Default for Settings {
             muted: false,
             preferred_device: None,
             smooth_device_switch: false,
+            exclusive_output: false,
         }
     }
 }
@@ -94,6 +97,10 @@ mod tests {
             !settings.smooth_device_switch,
             "默认硬切 —— 与加这个字段之前的行为一致"
         );
+        assert!(
+            !settings.exclusive_output,
+            "默认共享输出 —— 独占会占住设备，不能默认打开"
+        );
     }
 
     #[test]
@@ -109,6 +116,7 @@ mod tests {
             muted: true,
             preferred_device: Some("wasapi:{0.0.0.00000000}.{abc}".to_owned()),
             smooth_device_switch: true,
+            exclusive_output: true,
         };
         let text = serde_json::to_string(&settings).expect("序列化不该失败");
         let back: Settings = serde_json::from_str(&text).expect("反序列化不该失败");

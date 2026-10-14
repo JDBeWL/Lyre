@@ -41,7 +41,8 @@ impl Transport {
                 // `Finished` 由上层推进队列、设备列表只有底栏的设备菜单关心，这里都不处理
                 PlaybackEvent::Finished
                 | PlaybackEvent::VolumeChanged
-                | PlaybackEvent::DevicesChanged => {}
+                | PlaybackEvent::DevicesChanged
+                | PlaybackEvent::OutputModeChanged => {}
             },
         );
 

@@ -1,0 +1,42 @@
+[package]
+name = "lyre-audio-simd"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "PCM byte conversion for Lyre's exclusive output path, with AVX2/SSE2 kernels."
+
+# 故意不写 `[lints] workspace = true`：workspace 里 `unsafe_code = "forbid"` 优先级最高，
+# 内层 `allow` 覆盖不掉它。需要 unsafe 的只有这个 crate，自带的 [lints] 就是隔离边界；
+# 下面的规则与根 `Cargo.toml` 保持一致，只多了一条 SIMD 专属的例外。
+[lints.rust]
+unsafe_code = "allow"
+rust_2018_idioms = { level = "warn", priority = -1 }
+elided_lifetimes_in_paths = "allow"
+unused_lifetimes = "warn"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+unwrap_used = "warn"
+expect_used = "warn"
+clone_on_ref_ptr = "warn"
+needless_pass_by_value = "warn"
+too_many_arguments = "allow"
+module_name_repetitions = "allow"
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+float_cmp = "allow"
+cast_possible_truncation = "allow"
+cast_precision_loss = "allow"
+cast_sign_loss = "allow"
+unreadable_literal = "allow"
+wildcard_imports = "allow"
+too_many_lines = "allow"
+must_use_candidate = "allow"
+return_self_not_must_use = "allow"
+struct_excessive_bools = "allow"
+# SIMD 内核写的是 `storeu`（不要求对齐），从 `*mut u8` 转成向量指针是有意为之
+cast_ptr_alignment = "allow"
+# 内核里就是指针与展开式，逐块说明只会淹没真正的理由，模块头已经统一交代过
+undocumented_unsafe_blocks = "allow"

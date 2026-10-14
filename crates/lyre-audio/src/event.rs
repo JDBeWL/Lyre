@@ -39,6 +39,26 @@ impl PlaybackState {
     }
 }
 
+/// 输出模式。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum OutputMode {
+    /// 经过系统混音器（默认）。采样率与格式由混音器决定。
+    #[default]
+    Shared,
+    /// WASAPI 独占。应用直接把样本写进设备缓冲，协商到的口径能对上声源时是位完美直出。
+    Exclusive,
+}
+
+impl OutputMode {
+    /// 界面上显示的名字。
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Shared => "共享",
+            Self::Exclusive => "独占",
+        }
+    }
+}
+
 /// 音频线程到 UI 的事件，只承载语义变化；高频进度走 [`crate::Snapshot`]，否则一秒 20 条消息会打爆 UI 通知。
 #[derive(Clone, Debug, PartialEq)]
 pub enum PlayerEvent {
@@ -57,6 +77,11 @@ pub enum PlayerEvent {
     DeviceChanged {
         id: Option<String>,
         name: String,
+    },
+    /// 实际生效的输出模式变了。`detail` 是独占协商到的口径（共享模式或还没协商到时为空）。
+    OutputModeChanged {
+        mode: OutputMode,
+        detail: String,
     },
     /// 音频链路出错（设备打不开、文件解不了码……）。
     Error(String),

@@ -9,6 +9,8 @@ description = "GPUI view layer for Lyre: entities, components and theming."
 [dependencies]
 lyre-core = { workspace = true }
 lyre-audio = { workspace = true }
+# 独占后端依赖 lyre-audio（复用解码链），所以装配它只能在这一层：由这里把工厂注入音频线程。
+lyre-audio-exclusive = { path = "../lyre-audio-exclusive" }
 gpui = { workspace = true }
 gpui-platform = { workspace = true }
 gpui-component = { workspace = true }

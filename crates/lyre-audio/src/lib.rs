@@ -17,7 +17,7 @@ pub use command::PlayerCommand;
 pub use decode::{LockFreeSource, SymphoniaDecoder};
 pub use device::AudioDeviceInfo;
 pub use error::{AudioError, Result};
-pub use event::{PlaybackState, PlayerEvent};
+pub use event::{OutputMode, PlaybackState, PlayerEvent};
 pub use rodio_backend::RodioBackend;
 pub use snapshot::Snapshot;
 
@@ -26,6 +26,12 @@ use std::sync::mpsc::Sender;
 use std::time::Duration;
 
 use crate::device_monitor::DeviceMonitor;
+
+/// 独占后端工厂，由上层注入。
+///
+/// `lyre-audio-exclusive` 依赖本 crate 才能复用解码链，所以本 crate 不能反向依赖它 ——
+/// 独占后端的构造只能从这里传进来。参数是目标设备的稳定标识，`None` 表示系统默认。
+pub type ExclusiveOpenFn = Box<dyn FnMut(Option<&str>) -> Result<Box<dyn AudioBackend>> + Send>;
 
 /// UI 侧持握的句柄，`Send + Clone`；真正的音频资源在它背后那条线程里。
 #[derive(Clone)]
@@ -46,6 +52,24 @@ impl AudioHandle {
                 RodioBackend::open_with_device(device)
                     .map(|backend| Box::new(backend) as Box<dyn AudioBackend>)
             }),
+            None,
+        )
+    }
+
+    /// 启动音频线程，并带上独占后端工厂；没有它时 `SetOutputMode` 只会退回共享。
+    pub fn spawn_with_exclusive(
+        events: Sender<PlayerEvent>,
+        initial_device: Option<String>,
+        open_exclusive: ExclusiveOpenFn,
+    ) -> Result<Self> {
+        Self::spawn_inner(
+            events,
+            initial_device,
+            Box::new(|device| {
+                RodioBackend::open_with_device(device)
+                    .map(|backend| Box::new(backend) as Box<dyn AudioBackend>)
+            }),
+            Some(open_exclusive),
         )
     }
 
@@ -63,13 +87,14 @@ impl AudioHandle {
             Some(open) => open(),
             None => Err(AudioError::DeviceOpen("音频设备不可用".to_owned())),
         };
-        Self::spawn_inner(events, None, Box::new(reopen))
+        Self::spawn_inner(events, None, Box::new(reopen), None)
     }
 
     fn spawn_inner(
         events: Sender<PlayerEvent>,
         initial_device: Option<String>,
         open: thread::OpenFn,
+        open_exclusive: Option<ExclusiveOpenFn>,
     ) -> Result<Self> {
         let (tx, rx) = std::sync::mpsc::channel();
         let (signals_tx, signals_rx) = std::sync::mpsc::channel();
@@ -86,6 +111,7 @@ impl AudioHandle {
                     thread_snapshot,
                     initial_device,
                     open,
+                    open_exclusive,
                 );
             })
             .map_err(AudioError::ThreadSpawn)?;

@@ -4,13 +4,14 @@ use std::rc::Rc;
 
 use crate::common::button::TAB_STOP;
 use crate::common::thousands;
-use crate::entities::{LibraryEntity, PlaybackEntity};
+use crate::entities::{LibraryEntity, PlaybackEntity, PlaybackEvent};
 use crate::icon::{Glyph, icon};
 use crate::persist::data_dir;
 use crate::platform::*;
 use crate::settings::Settings;
 use crate::shell::{Density, NavSection, PanelTab, ShellEntity, SidebarState};
 use crate::theme;
+use lyre_audio::OutputMode;
 
 pub struct SettingsPanel {
     settings: Entity<SettingsEntity>,
@@ -37,6 +38,12 @@ impl SettingsPanel {
         let sub = cx.observe(&settings, |_, _, cx| cx.notify());
         // 数据卡写着各项计数，所以要 observe 曲库；曲库仅在扫描时每 80ms notify 一批。
         let library_sub = cx.observe(&library, |_, _, cx| cx.notify());
+        // 只关心输出模式：observe 播放实体会跟着进度的 10Hz 重绘一起白跑
+        let mode_sub = cx.subscribe(&playback, |_, _, event: &PlaybackEvent, cx| {
+            if matches!(event, PlaybackEvent::OutputModeChanged) {
+                cx.notify();
+            }
+        });
         Self {
             settings,
             shell,
@@ -44,8 +51,28 @@ impl SettingsPanel {
             playback,
             shortcuts_open: false,
             scroll: ScrollHandle::new(),
-            _subs: vec![sub, library_sub],
+            _subs: vec![sub, library_sub, mode_sub],
         }
+    }
+
+    /// 独占协商到的口径。非独占或还没协商到时没有可显示的东西。
+    fn output_detail(&self, cx: &Context<Self>) -> Option<impl IntoElement> {
+        let playback = self.playback.read(cx);
+        if playback.output_mode() != OutputMode::Exclusive {
+            return None;
+        }
+        let detail = playback.output_detail();
+        let text = if detail.is_empty() {
+            "正在协商独占格式…".to_owned()
+        } else {
+            format!("当前独占格式：{detail}")
+        };
+        Some(
+            div()
+                .text_size(px(theme::FONT_MICRO))
+                .text_color(theme::text_muted())
+                .child(text),
+        )
     }
 }
 
@@ -64,7 +91,8 @@ impl Render for SettingsPanel {
             self.settings.clone(),
             self.settings.clone(),
         );
-        let (for_smooth, playback) = (self.settings.clone(), self.playback.clone());
+        let (for_smooth, for_output) = (self.settings.clone(), self.settings.clone());
+        let (smooth_player, output_player) = (self.playback.clone(), self.playback.clone());
         let shell = self.shell.clone();
         let library = self.library.clone();
 
@@ -121,7 +149,13 @@ impl Render for SettingsPanel {
         let smooth: Picker = Rc::new(move |index: usize, cx: &mut App| {
             let value = index == 0;
             for_smooth.update(cx, |this, cx| this.set_smooth_device_switch(value, cx));
-            playback.update(cx, |playback, _cx| playback.set_smooth_switch(value));
+            smooth_player.update(cx, |playback, _cx| playback.set_smooth_switch(value));
+        });
+
+        let output: Picker = Rc::new(move |index: usize, cx: &mut App| {
+            let exclusive = index == 0;
+            for_output.update(cx, |this, cx| this.set_exclusive_output(exclusive, cx));
+            output_player.update(cx, |playback, _cx| playback.set_exclusive_output(exclusive));
         });
 
         // 两列的判断只读 `center_width()`，不在这里减侧栏与右面板。
@@ -209,16 +243,28 @@ impl Render for SettingsPanel {
             &recursive,
         ));
 
-        let audio_card = card("音频").child(choice_row(
-            cx,
-            Glyph::Devices,
-            "切换输出设备",
-            &[
-                ("平滑过渡", settings.smooth_device_switch),
-                ("直接切换", !settings.smooth_device_switch),
-            ],
-            &smooth,
-        ));
+        let audio_card = card("音频")
+            .child(choice_row(
+                cx,
+                Glyph::VolumeHigh,
+                "输出模式",
+                &[
+                    ("独占", settings.exclusive_output),
+                    ("共享", !settings.exclusive_output),
+                ],
+                &output,
+            ))
+            .child(choice_row(
+                cx,
+                Glyph::Devices,
+                "切换输出设备",
+                &[
+                    ("平滑过渡", settings.smooth_device_switch),
+                    ("直接切换", !settings.smooth_device_switch),
+                ],
+                &smooth,
+            ))
+            .children(self.output_detail(cx));
 
         let left = vec![list_card, startup_card];
         let right = vec![audio_card, import_card, data_section(&self.library, cx)];
@@ -707,6 +753,11 @@ impl SettingsEntity {
     /// 记住换设备时是否做交叉淡化。
     pub fn set_smooth_device_switch(&mut self, smooth: bool, cx: &mut Context<Self>) {
         self.update_and_save(cx, |settings| settings.smooth_device_switch = smooth);
+    }
+
+    /// 记住是否用 WASAPI 独占输出。
+    pub fn set_exclusive_output(&mut self, exclusive: bool, cx: &mut Context<Self>) {
+        self.update_and_save(cx, |settings| settings.exclusive_output = exclusive);
     }
 }
 

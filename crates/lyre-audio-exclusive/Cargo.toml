@@ -1,0 +1,31 @@
+[package]
+name = "lyre-audio-exclusive"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "WASAPI exclusive-mode output backend for Lyre, bit-perfect when the device accepts the source format."
+
+[dependencies]
+lyre-audio = { workspace = true }
+thiserror = { workspace = true }
+log = "0.4"
+crossbeam-channel = "0.5"
+rtrb = "0.3"
+rodio = { version = "0.22", default-features = false, features = ["playback"] }
+lyre-audio-simd = { path = "../lyre-audio-simd" }
+# 只用 sinc 重采样，不需要 FFT 那套依赖
+rubato = { version = "4", default-features = false }
+audioadapter-buffers = "4"
+
+[target.'cfg(windows)'.dependencies]
+wasapi = "0.23"
+
+# 同 lyre-audio-simd 的说明：本 crate 用的是 wasapi 的安全封装，全程零 unsafe，
+# 所以可以和 workspace 共用同一套规则（含 `unsafe_code = "forbid"`）。
+[dev-dependencies]
+tempfile = "3"
+
+[lints]
+workspace = true
+

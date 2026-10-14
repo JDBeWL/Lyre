@@ -55,6 +55,11 @@ pub enum AudioError {
     /// 音频线程创建失败。
     #[error("音频线程创建失败：{0}")]
     ThreadSpawn(#[source] std::io::Error),
+
+    /// 独占输出不可用（设备不支持、被占用、格式协商失败）。
+    /// 文案由独占后端给出，这里只做透传 —— 免得同一句话被套两层前缀。
+    #[error("{0}")]
+    Exclusive(String),
 }
 
 /// 音频链路统一 `Result`。
