@@ -35,6 +35,7 @@ pub(crate) fn run(
         open_failed: false,
         seen_content: false,
         ended_reported: false,
+        smooth_switch: false,
     };
 
     loop {
@@ -66,6 +67,8 @@ struct AudioThread {
     seen_content: bool,
     /// 本轮播放是否已经上报过 Ended，避免重复上报
     ended_reported: bool,
+    /// 换设备时是否交叉淡化。后端是懒创建的，所以标志得先在控制线程里存着。
+    smooth_switch: bool,
 }
 
 impl AudioThread {
@@ -77,7 +80,10 @@ impl AudioThread {
             }
             let device = self.device.clone();
             match (self.open)(device.as_deref()) {
-                Ok(backend) => self.backend = Some(backend),
+                Ok(mut backend) => {
+                    backend.set_smooth_switch(self.smooth_switch);
+                    self.backend = Some(backend);
+                }
                 Err(err) => {
                     self.open_failed = true;
                     self.snapshot.set_state(PlaybackState::Idle);
@@ -213,6 +219,13 @@ impl AudioThread {
 
             PlayerCommand::SetDevice { id } => self.select_device(id),
 
+            PlayerCommand::SetSmoothSwitch(enabled) => {
+                self.smooth_switch = enabled;
+                if let Some(backend) = self.backend.as_deref_mut() {
+                    backend.set_smooth_switch(enabled);
+                }
+            }
+
             PlayerCommand::Load { path, autoplay } => {
                 let outcome = self.backend().map(|backend| backend.load(&path, autoplay));
 
@@ -326,10 +339,11 @@ impl AudioThread {
 
     /// 每 50ms 一次刷新进度快照，并检测自然播放结束。
     fn tick(&mut self) {
-        let probe = self
-            .backend
-            .as_deref_mut()
-            .map(|backend| (backend.position(), backend.is_finished()));
+        // 淡出、挂起的交接这类收尾要等时间，靠这一拍推着走
+        let probe = self.backend.as_deref_mut().map(|backend| {
+            backend.tick();
+            (backend.position(), backend.is_finished())
+        });
 
         let Some((position, finished)) = probe else {
             return;

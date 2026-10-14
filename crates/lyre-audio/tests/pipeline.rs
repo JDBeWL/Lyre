@@ -372,6 +372,31 @@ fn switching_device_mid_playback_does_not_report_the_track_as_ended() {
 }
 
 #[test]
+fn smooth_switch_setting_does_not_disturb_playback() {
+    let (handle, rx, _state) = harness();
+
+    handle.send(PlayerCommand::Load {
+        path: PathBuf::from("/music/夢我夢中.flac"),
+        autoplay: true,
+    });
+    wait_for(&rx, |e| matches!(e, PlayerEvent::Loaded { .. }));
+
+    // 假后端走 trait 的默认空实现：这里要的是「这个开关既不改状态也不挡后面的命令」
+    handle.send(PlayerCommand::SetSmoothSwitch(true));
+    handle.send(PlayerCommand::SetSmoothSwitch(false));
+    handle.send(PlayerCommand::SetVolume(0.5));
+
+    let event =
+        wait_for(&rx, |e| matches!(e, PlayerEvent::Volume(_))).expect("开关不该挡住后续命令");
+    assert_eq!(event, PlayerEvent::Volume(0.5));
+    assert_eq!(
+        handle.snapshot().state(),
+        PlaybackState::Playing,
+        "改开关不该改变播放状态"
+    );
+}
+
+#[test]
 fn dropping_the_handle_shuts_the_thread_down() {
     let (handle, rx, _state) = harness();
     handle.send(PlayerCommand::Load {

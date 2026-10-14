@@ -1,12 +1,17 @@
-//! 解码层，包括解码器、淡入、下混等。
-//! 译码器的输出是 f32，采样率和声道数由解码器决定。解码器输出的采样率和声道数可能不符合播放器要求，
-//! 需要在解码器和播放器之间做重采样和下混。
+//! 解码层，包括解码器、声道转换、软削波、增益包络、无锁线程隔离。
+//! 译码器的输出是 f32，采样率和声道数由声源决定；重采样、布局转换与淡入淡出
+//! 都在解码器和播放器之间的适配链上完成。
 
+mod clip;
+mod convert;
 mod decoder;
 mod dsp;
 mod fade;
 mod source;
 
+pub use clip::SoftClip;
+pub use convert::ChannelConvertSource;
 pub use decoder::SymphoniaDecoder;
-pub use fade::FadeIn;
+pub use dsp::LfeConfig;
+pub use fade::{GainControl, GainRamp};
 pub use source::LockFreeSource;

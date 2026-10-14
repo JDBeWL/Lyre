@@ -76,6 +76,7 @@ impl RootView {
         // 静音退出时以 0 起播，但存档里留的是静音前的值（见 `VolumeControl::persist`）
         playback.update(cx, |playback, cx| {
             playback.set_volume(if stored.muted { 0.0 } else { stored.volume }, cx);
+            playback.set_smooth_switch(stored.smooth_device_switch);
         });
 
         // 系统文件对话框属于另一个进程，截图脚本点不动；设了这个环境变量就从该目录直接导入。
@@ -112,8 +113,15 @@ impl RootView {
         let search_page =
             cx.new(|cx| SearchPage::new(library.clone(), shell.clone(), covers.clone(), cx));
         let queue_panel = cx.new(|cx| QueuePanel::new(library.clone(), cx));
-        let settings_panel =
-            cx.new(|cx| SettingsPanel::new(settings.clone(), shell.clone(), library.clone(), cx));
+        let settings_panel = cx.new(|cx| {
+            SettingsPanel::new(
+                settings.clone(),
+                shell.clone(),
+                library.clone(),
+                playback.clone(),
+                cx,
+            )
+        });
         let bottom_bar = cx.new(|cx| {
             BottomBar::new(
                 shell.clone(),

@@ -1,6 +1,7 @@
 //! 解码链路集成测试
 //! 用例自己按 WAV 格式拼字节，不引第三方编码库，免得编码器参与进被测路径。
-//! 覆盖格式探测 → 解码 → 下混 → 独立线程 → 有界通道 → EOF 判定，重点是结束判定。
+//! 覆盖格式探测 → 解码 → 独立线程 → 有界通道 → EOF 判定，重点是结束判定。
+//! 声道布局的转换在下混链路上（`decode::dsp` / `decode::convert`），这里只验解码器原样输出。
 //!
 //! 测试里 unwrap/expect 是正当的断言手段。`clippy.toml` 的 `allow-*-in-tests`
 //! 只覆盖 `#[cfg(test)]` 模块，不覆盖 `tests/` 下的独立集成测试 crate，故在此显式允许。
@@ -93,51 +94,58 @@ fn decodes_pcm_to_interleaved_stereo_f32() {
 }
 
 #[test]
-fn mono_is_promoted_to_stereo_by_duplication() {
+fn mono_survives_the_decoder_and_is_promoted_later_on_the_chain() {
     let (_dir, path) = temp_wav("mono.wav");
     write_wav(&path, 8_000, 1, 100, |_, _| 0.25);
 
     let decoder = SymphoniaDecoder::new(&path).unwrap();
     assert_eq!(decoder.source_channels(), 1, "源文件是单声道");
-    assert_eq!(decoder.channels(), 2, "输出统一为立体声");
+    assert_eq!(
+        decoder.channels(),
+        1,
+        "声道数由输出设备决定，解码器不再替它做主"
+    );
 
     let samples: Vec<f32> = decoder.collect();
-    assert_eq!(samples.len(), 200, "100 帧单声道 → 200 个交错样本");
+    assert_eq!(samples.len(), 100, "100 帧单声道 = 100 个样本");
     assert!(
         samples.iter().all(|s| (s - 0.25).abs() < 1e-3),
-        "单声道复制到左右两路，值应当一致"
+        "解码阶段不该改动样本值"
     );
 }
 
 #[test]
-fn surround_wav_is_downmixed_to_stereo_with_itu_coefficients() {
+fn surround_keeps_its_layout_all_the_way_through_the_decoder() {
     let (_dir, path) = temp_wav("surround.wav");
     // FL FR FC LFE SL SR
     write_wav(&path, 8_000, 6, 100, |_, channel| match channel {
         0 => 0.5,
         1 => 0.25, // FR
+        3 => 0.4,  // LFE
         _ => 0.0,
     });
 
     let decoder = SymphoniaDecoder::new(&path).unwrap();
     assert_eq!(decoder.source_channels(), 6);
-    assert_eq!(decoder.channels(), 2);
+    assert_eq!(
+        decoder.channels(),
+        6,
+        "下混发生在播放链路上，解码器原样输出源布局"
+    );
 
-    let samples: Vec<f32> = decoder.take(200).collect();
-    assert_eq!(samples.len(), 200, "6 声道应当被压成 2 声道");
+    let samples: Vec<f32> = decoder.take(12).collect();
+    assert_eq!(samples.len(), 12, "两帧 6 声道");
 
-    // 只剩 FL/FR，中置与环绕都是 0，归一化系数 0.707
-    let expected_left = 0.5 * 0.707;
-    let expected_right = 0.25 * 0.707;
+    // LFE 必须原样留着：2.1 折入与立体声下混都靠它，解码阶段丢掉就再也找不回来
     assert!(
-        (samples[0] - expected_left).abs() < 0.01,
-        "左声道 = {}，期望约 {expected_left}",
-        samples[0]
+        (samples[3] - 0.4).abs() < 0.01,
+        "LFE = {}，期望约 0.4",
+        samples[3]
     );
     assert!(
-        (samples[1] - expected_right).abs() < 0.01,
-        "右声道 = {}，期望约 {expected_right}",
-        samples[1]
+        (samples[0] - 0.5).abs() < 0.01,
+        "FL = {}，期望约 0.5",
+        samples[0]
     );
 }
 

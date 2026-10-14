@@ -21,6 +21,8 @@ pub enum PlayerCommand {
     SetDevice {
         id: Option<String>,
     },
+    /// 换设备时是否交叉淡化。设置项活在 UI 线程、后端活在音频线程，只能这样送过来。
+    SetSmoothSwitch(bool),
     /// 让音频线程退出。由 `AudioHandle::drop` 发出。
     Shutdown,
 }

@@ -4,7 +4,7 @@ use std::rc::Rc;
 
 use crate::common::button::TAB_STOP;
 use crate::common::thousands;
-use crate::entities::LibraryEntity;
+use crate::entities::{LibraryEntity, PlaybackEntity};
 use crate::icon::{Glyph, icon};
 use crate::persist::data_dir;
 use crate::platform::*;
@@ -16,6 +16,8 @@ pub struct SettingsPanel {
     settings: Entity<SettingsEntity>,
     shell: Entity<ShellEntity>,
     library: Entity<LibraryEntity>,
+    /// 音频相关的偏好改完要立刻下发，不能只等下次启动。
+    playback: Entity<PlaybackEntity>,
     /// 快捷键卡的展开态，本地状态、不落盘。
     shortcuts_open: bool,
     /// 面板整块可纵向滚动，矮窗口下「导入」以下会被裁掉。
@@ -29,6 +31,7 @@ impl SettingsPanel {
         settings: Entity<SettingsEntity>,
         shell: Entity<ShellEntity>,
         library: Entity<LibraryEntity>,
+        playback: Entity<PlaybackEntity>,
         cx: &mut Context<Self>,
     ) -> Self {
         let sub = cx.observe(&settings, |_, _, cx| cx.notify());
@@ -38,6 +41,7 @@ impl SettingsPanel {
             settings,
             shell,
             library,
+            playback,
             shortcuts_open: false,
             scroll: ScrollHandle::new(),
             _subs: vec![sub, library_sub],
@@ -60,6 +64,7 @@ impl Render for SettingsPanel {
             self.settings.clone(),
             self.settings.clone(),
         );
+        let (for_smooth, playback) = (self.settings.clone(), self.playback.clone());
         let shell = self.shell.clone();
         let library = self.library.clone();
 
@@ -110,6 +115,13 @@ impl Render for SettingsPanel {
 
         let resume: Picker = Rc::new(move |index: usize, cx: &mut App| {
             for_resume.update(cx, |this, cx| this.set_resume_position(index == 0, cx));
+        });
+
+        // 音频线程是另一条线程，落盘之外还得当场把新值送过去
+        let smooth: Picker = Rc::new(move |index: usize, cx: &mut App| {
+            let value = index == 0;
+            for_smooth.update(cx, |this, cx| this.set_smooth_device_switch(value, cx));
+            playback.update(cx, |playback, _cx| playback.set_smooth_switch(value));
         });
 
         // 两列的判断只读 `center_width()`，不在这里减侧栏与右面板。
@@ -197,8 +209,19 @@ impl Render for SettingsPanel {
             &recursive,
         ));
 
+        let audio_card = card("音频").child(choice_row(
+            cx,
+            Glyph::Devices,
+            "切换输出设备",
+            &[
+                ("平滑过渡", settings.smooth_device_switch),
+                ("直接切换", !settings.smooth_device_switch),
+            ],
+            &smooth,
+        ));
+
         let left = vec![list_card, startup_card];
-        let right = vec![import_card, data_section(&self.library, cx)];
+        let right = vec![audio_card, import_card, data_section(&self.library, cx)];
         let choices = if two_columns {
             div()
                 .w_full()
@@ -679,6 +702,11 @@ impl SettingsEntity {
     /// 记住输出设备。`None` 表示跟随系统默认。
     pub fn set_preferred_device(&mut self, device: Option<String>, cx: &mut Context<Self>) {
         self.update_and_save(cx, |settings| settings.preferred_device = device);
+    }
+
+    /// 记住换设备时是否做交叉淡化。
+    pub fn set_smooth_device_switch(&mut self, smooth: bool, cx: &mut Context<Self>) {
+        self.update_and_save(cx, |settings| settings.smooth_device_switch = smooth);
     }
 }
 

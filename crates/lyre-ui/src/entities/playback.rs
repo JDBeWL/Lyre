@@ -46,6 +46,8 @@ pub struct PlaybackEntity {
     device: Option<String>,
     /// 当前输出设备的友好名，仅用于展示。
     device_name: String,
+    /// 已经下发给音频线程的换设备平滑开关；`false` 与音频线程的初值一致。
+    smooth_switch: bool,
 
     /// 事件泵。持有它任务才不会被提前中断。
     _pump: Task<()>,
@@ -141,6 +143,7 @@ impl PlaybackEntity {
             devices: Vec::new(),
             device: None,
             device_name: String::new(),
+            smooth_switch: false,
             _pump: pump,
         }
     }
@@ -262,6 +265,16 @@ impl PlaybackEntity {
         self.send(PlayerCommand::SetVolume(clamped));
         cx.emit(PlaybackEvent::VolumeChanged);
         cx.notify();
+    }
+
+    /// 换设备是否交叉淡化。设置项在 UI 线程、后端在音频线程，只能这样下发；
+    /// 值没变就不重复发，免得每次改设置都往音频线程塞一条。
+    pub fn set_smooth_switch(&mut self, enabled: bool) {
+        if self.smooth_switch == enabled {
+            return;
+        }
+        self.smooth_switch = enabled;
+        self.send(PlayerCommand::SetSmoothSwitch(enabled));
     }
 
     fn apply(&mut self, event: PlayerEvent, emitted: &mut Vec<PlaybackEvent>) {

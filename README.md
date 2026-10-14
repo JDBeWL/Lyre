@@ -1,6 +1,6 @@
 # Lyre
 
-基于 [GPUI](https://gpui.rs)的桌面音乐播放器。
+基于 [GPUI](https://gpui.rs) 的桌面音乐播放器。
 
 ![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)
 

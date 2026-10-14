@@ -46,6 +46,8 @@ clone_on_ref_ptr = "warn"
 needless_pass_by_value = "warn"
 too_many_arguments = "allow"      # GPUI 的渲染工厂签名，如 common/cover.rs::list_cover
 module_name_repetitions = "allow" # Sidebar / SidebarState、LibraryEntity / LibraryEvent
+# 设置项与音频线程状态本来就是一组互不相干的开关，拆成枚举只会更难读
+struct_excessive_bools = "allow"
 missing_errors_doc = "allow"
 missing_panics_doc = "allow"
 # 生产侧的浮点比较都是「已 clamp 的值按位变没变」，换成误差区间会漏掉本该有的重绘

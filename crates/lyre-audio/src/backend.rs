@@ -36,4 +36,13 @@ pub trait AudioBackend: 'static {
     fn current_device(&self) -> Option<String> {
         None
     }
+
+    /// 换设备时是否交叉淡化。默认无操作，注入式假后端不必实现。
+    fn set_smooth_switch(&mut self, enabled: bool) {
+        let _ = enabled;
+    }
+
+    /// 每拍调用一次，让后端处理需要时间的收尾（淡出、挂起的交接）。
+    /// 默认无操作，注入式假后端不必实现。
+    fn tick(&mut self) {}
 }

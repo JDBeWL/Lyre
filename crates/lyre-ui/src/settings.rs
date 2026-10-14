@@ -31,6 +31,9 @@ pub struct Settings {
     /// 输出设备的稳定标识（见 `lyre_audio::AudioDeviceInfo::id`）；`None` 表示跟随系统默认。
     /// 标识是机器绑定的，换机器或重装驱动后可能失效，那时静默回退默认设备。
     pub preferred_device: Option<String>,
+    /// 换设备时让旧输出流淡出、新流淡入，把重建链路的空窗盖掉。
+    /// 默认关：两路短暂并存时可能有轻微的相位抵消，听感不合就还是硬切干净。
+    pub smooth_device_switch: bool,
 }
 
 impl Default for Settings {
@@ -46,6 +49,7 @@ impl Default for Settings {
             volume: 1.0,
             muted: false,
             preferred_device: None,
+            smooth_device_switch: false,
         }
     }
 }
@@ -86,6 +90,10 @@ mod tests {
         );
         assert!(!settings.muted);
         assert_eq!(settings.preferred_device, None, "默认跟随系统默认设备");
+        assert!(
+            !settings.smooth_device_switch,
+            "默认硬切 —— 与加这个字段之前的行为一致"
+        );
     }
 
     #[test]
@@ -100,6 +108,7 @@ mod tests {
             volume: 0.35,
             muted: true,
             preferred_device: Some("wasapi:{0.0.0.00000000}.{abc}".to_owned()),
+            smooth_device_switch: true,
         };
         let text = serde_json::to_string(&settings).expect("序列化不该失败");
         let back: Settings = serde_json::from_str(&text).expect("反序列化不该失败");
