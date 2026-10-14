@@ -24,4 +24,16 @@ pub trait AudioBackend: 'static {
 
     /// 当前队列是否已经放空 —— 用来判定「一首歌自然播完了」。
     fn is_finished(&self) -> bool;
+
+    /// 切换输出设备，`None` 表示跟随系统默认。正在播放的曲目要在新设备上接着放。
+    /// 默认无操作，注入式假后端不必实现。
+    fn set_device(&mut self, device: Option<&str>) -> Result<()> {
+        let _ = device;
+        Ok(())
+    }
+
+    /// 当前输出设备的稳定标识；跟随系统默认或未知时返回 `None`。
+    fn current_device(&self) -> Option<String> {
+        None
+    }
 }

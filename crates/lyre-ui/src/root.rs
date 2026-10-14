@@ -62,11 +62,11 @@ impl RootView {
         // 先读盘：下面的实体按它初始化
         let stored = Settings::load();
 
-        let playback = cx.new(PlaybackEntity::new);
+        let playback = cx.new(|cx| PlaybackEntity::new(stored.preferred_device.clone(), cx));
         let library = cx.new(LibraryEntity::new);
         let shell = cx.new(|cx| ShellEntity::new(window, cx));
         let covers = cx.new(|_| CoverCache::default());
-        let settings = cx.new(|cx| SettingsEntity::new(stored, cx));
+        let settings = cx.new(|cx| SettingsEntity::new(stored.clone(), cx));
 
         // 偏好要在启动时显式应用进 shell / library，只存着不会生效
         shell.update(cx, |shell, cx| shell.apply_settings(&stored, cx));
@@ -118,6 +118,8 @@ impl RootView {
             BottomBar::new(
                 shell.clone(),
                 library.clone(),
+                playback.clone(),
+                settings.clone(),
                 mini.clone(),
                 transport.clone(),
                 seek_bar.clone(),
@@ -152,7 +154,8 @@ impl RootView {
                 PlaybackEvent::StateChanged => {
                     resume::save_resume(&this.playback, &this.settings, cx);
                 }
-                PlaybackEvent::VolumeChanged => {}
+                // 设备列表由底栏自己订阅刷新，根视图不关心
+                PlaybackEvent::VolumeChanged | PlaybackEvent::DevicesChanged => {}
             }
         });
 

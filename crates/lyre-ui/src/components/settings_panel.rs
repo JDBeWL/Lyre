@@ -631,7 +631,7 @@ impl SettingsEntity {
     }
 
     pub fn settings(&self) -> Settings {
-        self.settings
+        self.settings.clone()
     }
 
     fn update_and_save(&mut self, cx: &mut Context<Self>, edit: impl FnOnce(&mut Settings)) {
@@ -674,6 +674,11 @@ impl SettingsEntity {
             settings.volume = volume;
             settings.muted = muted;
         });
+    }
+
+    /// 记住输出设备。`None` 表示跟随系统默认。
+    pub fn set_preferred_device(&mut self, device: Option<String>, cx: &mut Context<Self>) {
+        self.update_and_save(cx, |settings| settings.preferred_device = device);
     }
 }
 

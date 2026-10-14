@@ -38,7 +38,10 @@ impl Transport {
                     this.has_track = playback.current().is_some();
                     cx.notify();
                 }
-                PlaybackEvent::Finished | PlaybackEvent::VolumeChanged => {}
+                // `Finished` 由上层推进队列、设备列表只有底栏的设备菜单关心，这里都不处理
+                PlaybackEvent::Finished
+                | PlaybackEvent::VolumeChanged
+                | PlaybackEvent::DevicesChanged => {}
             },
         );
 

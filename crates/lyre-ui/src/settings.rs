@@ -12,7 +12,7 @@ const FILE: &str = "settings.json";
 /// 可持久化的界面偏好。播放模式、进度这类会话内的状态不在这里。
 /// 音量是例外：每次启动都该是用户上次要的那个值，包括当时是不是静音。
 // `#[serde(default)]`：缺字段用默认值补齐，否则新增设置项会让老配置文件整体失效。
-#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
     pub density: Density,
@@ -28,6 +28,9 @@ pub struct Settings {
     pub volume: f32,
     /// 退出时是否处于静音。
     pub muted: bool,
+    /// 输出设备的稳定标识（见 `lyre_audio::AudioDeviceInfo::id`）；`None` 表示跟随系统默认。
+    /// 标识是机器绑定的，换机器或重装驱动后可能失效，那时静默回退默认设备。
+    pub preferred_device: Option<String>,
 }
 
 impl Default for Settings {
@@ -42,6 +45,7 @@ impl Default for Settings {
             resume_position: true,
             volume: 1.0,
             muted: false,
+            preferred_device: None,
         }
     }
 }
@@ -81,6 +85,7 @@ mod tests {
             "默认满音量 —— 与加这个字段之前的行为一致"
         );
         assert!(!settings.muted);
+        assert_eq!(settings.preferred_device, None, "默认跟随系统默认设备");
     }
 
     #[test]
@@ -94,6 +99,7 @@ mod tests {
             resume_position: false,
             volume: 0.35,
             muted: true,
+            preferred_device: Some("wasapi:{0.0.0.00000000}.{abc}".to_owned()),
         };
         let text = serde_json::to_string(&settings).expect("序列化不该失败");
         let back: Settings = serde_json::from_str(&text).expect("反序列化不该失败");

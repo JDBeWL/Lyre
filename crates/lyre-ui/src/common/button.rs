@@ -78,7 +78,8 @@ impl IconButton {
         self
     }
 
-    pub fn render(self) -> impl IntoElement {
+    /// 返回带 id 的元素：既是普通按钮，也能直接当作下拉菜单的触发器（见 [`crate::common::menu::dropdown`]）。
+    pub fn render(self) -> Stateful<Div> {
         let IconButton {
             id,
             glyph,

@@ -44,7 +44,10 @@ impl NowPlaying {
                 }
                 // 状态变化也要跟：加载失败走的是 `Error → StateChanged`，只听换曲会让错误提示拖到切下一首才出现。
                 PlaybackEvent::StateChanged => cx.notify(),
-                PlaybackEvent::Finished | PlaybackEvent::VolumeChanged => {}
+                // 设备列表只有底栏的设备菜单关心
+                PlaybackEvent::Finished
+                | PlaybackEvent::VolumeChanged
+                | PlaybackEvent::DevicesChanged => {}
             }
         });
 

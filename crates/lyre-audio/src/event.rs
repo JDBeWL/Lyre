@@ -1,6 +1,8 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
+use crate::device::AudioDeviceInfo;
+
 /// 播放状态。`as_u8` / `from_u8` 的数值映射会存进原子量。
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum PlaybackState {
@@ -49,6 +51,13 @@ pub enum PlayerEvent {
     /// 一首歌自然播放结束。由 UI 决定下一曲还是循环。
     Ended,
     Volume(f32),
+    /// 全部可用输出设备。切换设备、插拔设备后都会重新发一份。
+    Devices(Vec<AudioDeviceInfo>),
+    /// 当前生效的输出设备变了。`id` 为 `None` 表示跟随系统默认。
+    DeviceChanged {
+        id: Option<String>,
+        name: String,
+    },
     /// 音频链路出错（设备打不开、文件解不了码……）。
     Error(String),
 }

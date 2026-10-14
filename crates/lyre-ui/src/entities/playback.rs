@@ -4,7 +4,9 @@ use std::sync::Arc;
 use std::sync::mpsc::{self, TryRecvError};
 use std::time::Duration;
 
-use lyre_audio::{AudioHandle, PlaybackState, PlayerCommand, PlayerEvent, Snapshot};
+use lyre_audio::{
+    AudioDeviceInfo, AudioHandle, PlaybackState, PlayerCommand, PlayerEvent, Snapshot,
+};
 use lyre_core::Track;
 
 use crate::platform::*;
@@ -21,6 +23,8 @@ pub enum PlaybackEvent {
     StateChanged,
     /// 音量变了
     VolumeChanged,
+    /// 可用设备列表或当前输出设备变了
+    DevicesChanged,
     /// 一首歌自然播完了 —— 由上层决定下一曲还是循环
     Finished,
 }
@@ -36,6 +40,13 @@ pub struct PlaybackEntity {
     volume: f32,
     error: Option<String>,
 
+    /// 可用输出设备，由音频线程枚举后送上来。
+    devices: Vec<AudioDeviceInfo>,
+    /// 当前输出设备标识；`None` 表示跟随系统默认。
+    device: Option<String>,
+    /// 当前输出设备的友好名，仅用于展示。
+    device_name: String,
+
     /// 事件泵。持有它任务才不会被提前中断。
     _pump: Task<()>,
 }
@@ -43,11 +54,11 @@ pub struct PlaybackEntity {
 impl EventEmitter<PlaybackEvent> for PlaybackEntity {}
 
 impl PlaybackEntity {
-    pub fn new(cx: &mut Context<Self>) -> Self {
+    pub fn new(initial_device: Option<String>, cx: &mut Context<Self>) -> Self {
         let (tx, rx) = mpsc::channel();
         // 线程起不来（资源耗尽）不是致命错误：退化成没声音但界面可用，原因留在 `error` 里显示。
         let mut startup_error = None;
-        let handle = match AudioHandle::spawn(tx) {
+        let handle = match AudioHandle::spawn(tx, initial_device) {
             Ok(handle) => Some(handle),
             Err(err) => {
                 let message = err.to_string();
@@ -56,6 +67,10 @@ impl PlaybackEntity {
                 None
             }
         };
+        // 设备列表不会主动推给一个还没问过的新句柄，先要一份，否则菜单在首次插拔前一直是空的
+        if let Some(handle) = &handle {
+            handle.send(PlayerCommand::EnumerateDevices);
+        }
         // 没有句柄就没有共享快照，自己造一个默认的：进度恒为 0，界面不至于崩。
         let snapshot = handle
             .as_ref()
@@ -123,6 +138,9 @@ impl PlaybackEntity {
             duration: Duration::ZERO,
             volume,
             error: startup_error,
+            devices: Vec::new(),
+            device: None,
+            device_name: String::new(),
             _pump: pump,
         }
     }
@@ -165,6 +183,27 @@ impl PlaybackEntity {
 
     pub fn error(&self) -> Option<&str> {
         self.error.as_deref()
+    }
+
+    /// 可用输出设备，顺序即音频线程枚举出来的顺序。
+    pub fn device_list(&self) -> &[AudioDeviceInfo] {
+        &self.devices
+    }
+
+    /// 当前输出设备标识；`None` 表示跟随系统默认。
+    pub fn current_device(&self) -> Option<&str> {
+        self.device.as_deref()
+    }
+
+    /// 当前输出设备的友好名，跟随默认时是那一刻默认设备的名字。
+    pub fn current_device_name(&self) -> &str {
+        &self.device_name
+    }
+
+    /// 切换输出设备。`None` 表示跟随系统默认。真正的落盘由调用方交给设置实体。
+    pub fn set_device(&mut self, id: Option<String>, cx: &mut Context<Self>) {
+        self.send(PlayerCommand::SetDevice { id });
+        cx.notify();
     }
 
     /// 装载曲目：`current` 与状态乐观更新，时长稍后由 `PlayerEvent::Loaded` 校正。
@@ -251,6 +290,17 @@ impl PlaybackEntity {
                     self.volume = volume;
                     emitted.push(PlaybackEvent::VolumeChanged);
                 }
+            }
+
+            PlayerEvent::Devices(devices) => {
+                self.devices = devices;
+                emitted.push(PlaybackEvent::DevicesChanged);
+            }
+
+            PlayerEvent::DeviceChanged { id, name } => {
+                self.device = id;
+                self.device_name = name;
+                emitted.push(PlaybackEvent::DevicesChanged);
             }
 
             PlayerEvent::Error(message) => {

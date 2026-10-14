@@ -4,6 +4,8 @@
 pub mod backend;
 pub mod command;
 pub mod decode;
+pub mod device;
+mod device_monitor;
 pub mod error;
 pub mod event;
 pub mod rodio_backend;
@@ -13,6 +15,7 @@ mod thread;
 pub use backend::AudioBackend;
 pub use command::PlayerCommand;
 pub use decode::{LockFreeSource, SymphoniaDecoder};
+pub use device::AudioDeviceInfo;
 pub use error::{AudioError, Result};
 pub use event::{PlaybackState, PlayerEvent};
 pub use rodio_backend::RodioBackend;
@@ -22,19 +25,28 @@ use std::sync::Arc;
 use std::sync::mpsc::Sender;
 use std::time::Duration;
 
+use crate::device_monitor::DeviceMonitor;
+
 /// UI 侧持握的句柄，`Send + Clone`；真正的音频资源在它背后那条线程里。
 #[derive(Clone)]
 pub struct AudioHandle {
     tx: Sender<PlayerCommand>,
     snapshot: Arc<Snapshot>,
+    /// 与句柄同寿命：最后一个句柄析构时设备监视线程随之收工。
+    _monitor: Arc<DeviceMonitor>,
 }
 
 impl AudioHandle {
-    /// 启动音频线程。默认使用 rodio 后端。
-    pub fn spawn(events: Sender<PlayerEvent>) -> Result<Self> {
-        Self::spawn_with(events, || {
-            RodioBackend::open().map(|b| Box::new(b) as Box<dyn AudioBackend>)
-        })
+    /// 启动音频线程。默认使用 rodio 后端，`initial_device` 为 `None` 时跟随系统默认设备。
+    pub fn spawn(events: Sender<PlayerEvent>, initial_device: Option<String>) -> Result<Self> {
+        Self::spawn_inner(
+            events,
+            initial_device,
+            Box::new(|device| {
+                RodioBackend::open_with_device(device)
+                    .map(|backend| Box::new(backend) as Box<dyn AudioBackend>)
+            }),
+        )
     }
 
     /// 启动音频线程，后端由调用方提供；懒创建 —— 第一条命令才开设备，没声卡也能启动。
@@ -45,16 +57,44 @@ impl AudioHandle {
     where
         F: FnOnce() -> Result<Box<dyn AudioBackend>> + Send + 'static,
     {
+        // 注入式后端只开一次；真实链路可以反复重开，这类工厂不行，重复调用按设备不可用上报。
+        let mut once = Some(open);
+        let reopen = move |_: Option<&str>| match once.take() {
+            Some(open) => open(),
+            None => Err(AudioError::DeviceOpen("音频设备不可用".to_owned())),
+        };
+        Self::spawn_inner(events, None, Box::new(reopen))
+    }
+
+    fn spawn_inner(
+        events: Sender<PlayerEvent>,
+        initial_device: Option<String>,
+        open: thread::OpenFn,
+    ) -> Result<Self> {
         let (tx, rx) = std::sync::mpsc::channel();
+        let (signals_tx, signals_rx) = std::sync::mpsc::channel();
         let snapshot = Arc::new(Snapshot::default());
 
         let thread_snapshot = Arc::clone(&snapshot);
         std::thread::Builder::new()
             .name("lyre-audio".to_owned())
-            .spawn(move || thread::run(&rx, events, thread_snapshot, open))
+            .spawn(move || {
+                thread::run(
+                    &rx,
+                    &signals_rx,
+                    events,
+                    thread_snapshot,
+                    initial_device,
+                    open,
+                );
+            })
             .map_err(AudioError::ThreadSpawn)?;
 
-        Ok(Self { tx, snapshot })
+        Ok(Self {
+            tx,
+            snapshot,
+            _monitor: Arc::new(DeviceMonitor::start(signals_tx)),
+        })
     }
 
     /// 下发一条命令。音频线程已经退出时静默忽略。

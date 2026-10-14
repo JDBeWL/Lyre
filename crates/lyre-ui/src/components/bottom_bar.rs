@@ -3,9 +3,10 @@
 
 use crate::components::mini_now_playing::MiniNowPlaying;
 use crate::components::seek_bar::SeekBar;
+use crate::components::settings_panel::SettingsEntity;
 use crate::components::transport::Transport;
 use crate::components::volume::VolumeControl;
-use crate::entities::LibraryEntity;
+use crate::entities::{LibraryEntity, PlaybackEntity, PlaybackEvent};
 use crate::icon::Glyph;
 use crate::platform::*;
 use crate::shell::{PanelTab, ShellEntity};
@@ -14,6 +15,8 @@ use crate::theme;
 pub struct BottomBar {
     shell: Entity<ShellEntity>,
     library: Entity<LibraryEntity>,
+    playback: Entity<PlaybackEntity>,
+    settings: Entity<SettingsEntity>,
     mini: Entity<MiniNowPlaying>,
     transport: Entity<Transport>,
     seek: Entity<SeekBar>,
@@ -25,6 +28,8 @@ impl BottomBar {
     pub fn new(
         shell: Entity<ShellEntity>,
         library: Entity<LibraryEntity>,
+        playback: Entity<PlaybackEntity>,
+        settings: Entity<SettingsEntity>,
         mini: Entity<MiniNowPlaying>,
         transport: Entity<Transport>,
         seek: Entity<SeekBar>,
@@ -34,17 +39,88 @@ impl BottomBar {
         // 模式按钮的图标要跟着模式变，所以得 observe 曲库（低频，可接受）
         let library_sub = cx.observe(&library, |_, _, cx| cx.notify());
         let shell_sub = cx.observe(&shell, |_, _, cx| cx.notify());
+        // 设备列表只在插拔或切换时变；subscribe 而不是 observe，免得被 10Hz 的进度通知带着重绘
+        let device_sub = cx.subscribe(&playback, |_, _, event: &PlaybackEvent, cx| {
+            if matches!(event, PlaybackEvent::DevicesChanged) {
+                cx.notify();
+            }
+        });
 
         Self {
             shell,
             library,
+            playback,
+            settings,
             mini,
             transport,
             seek,
             volume,
-            _subs: vec![library_sub, shell_sub],
+            _subs: vec![library_sub, shell_sub, device_sub],
         }
     }
+}
+
+/// 选中项前面加勾。
+fn mark_if(selected: bool, text: &str) -> String {
+    if selected {
+        format!("✓ {text}")
+    } else {
+        text.to_owned()
+    }
+}
+
+/// 设备菜单。列表在展开这一刻才读：插拔随时会改它，预造一份只会显示过期数据。
+fn device_menu(
+    mut menu: PopupMenu,
+    playback: &Entity<PlaybackEntity>,
+    settings: &Entity<SettingsEntity>,
+    cx: &mut Context<PopupMenu>,
+) -> PopupMenu {
+    let devices = playback.read(cx).device_list().to_vec();
+    let current = playback.read(cx).current_device().map(str::to_owned);
+
+    {
+        let playback = playback.clone();
+        let settings = settings.clone();
+        menu = menu.item(
+            PopupMenuItem::new(mark_if(current.is_none(), "跟随系统默认")).on_click(
+                move |_, _, cx| {
+                    playback.update(cx, |playback, cx| playback.set_device(None, cx));
+                    settings.update(cx, |settings, cx| settings.set_preferred_device(None, cx));
+                },
+            ),
+        );
+    }
+
+    if !devices.is_empty() {
+        menu = menu.item(PopupMenuItem::separator());
+    }
+
+    for device in devices {
+        // 跟随默认时那一台就是当前生效的设备；显式选定过则只勾选中的那台
+        let selected = match &current {
+            Some(id) => *id == device.id,
+            None => device.is_default,
+        };
+        let playback = playback.clone();
+        let settings = settings.clone();
+        let id = device.id.clone();
+        menu = menu.item(
+            crate::common::menu::long_item(mark_if(selected, &device.name)).on_click(
+                move |_, _, cx| {
+                    let chosen = id.clone();
+                    playback.update(cx, |playback, cx| {
+                        playback.set_device(Some(chosen.clone()), cx);
+                    });
+                    settings.update(cx, |settings, cx| {
+                        settings.set_preferred_device(Some(chosen), cx);
+                    });
+                },
+            ),
+        );
+    }
+
+    menu
 }
 
 impl Render for BottomBar {
@@ -79,7 +155,7 @@ impl Render for BottomBar {
         let queue_open = panel == Some(PanelTab::Queue);
         let lyrics_open = self.shell.read(cx).shows_lyrics();
 
-        // 设备 / 全屏两项没有后端支撑，所以是明确的禁用态占位。
+        // 全屏项还没有后端支撑，仍是明确的禁用态占位。
         let right = |fixed_width: Option<f32>| {
             let now_playing =
                 crate::common::button::IconButton::new("bar-now-playing", Glyph::PanelRight)
@@ -150,12 +226,19 @@ impl Render for BottomBar {
                 })
                 .render();
 
-            let devices = crate::common::button::IconButton::new("bar-devices", Glyph::Devices)
-                .label("播放设备（即将推出）")
-                .box_size(28.)
-                .glyph_size(15.)
-                .enabled(false)
-                .render();
+            let devices = crate::common::menu::dropdown(
+                crate::common::button::IconButton::new("bar-devices", Glyph::Devices)
+                    .label("播放设备")
+                    .box_size(28.)
+                    .glyph_size(15.)
+                    .render(),
+                Anchor::TopRight,
+                {
+                    let playback = self.playback.clone();
+                    let settings = self.settings.clone();
+                    move |menu, _window, cx| device_menu(menu, &playback, &settings, cx)
+                },
+            );
             let fullscreen =
                 crate::common::button::IconButton::new("bar-fullscreen", Glyph::Fullscreen)
                     .label("全屏（即将推出）")

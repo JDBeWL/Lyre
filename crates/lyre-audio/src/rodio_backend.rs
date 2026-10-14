@@ -10,6 +10,7 @@ use rodio::{DeviceSinkBuilder, MixerDeviceSink, Player};
 
 use crate::backend::AudioBackend;
 use crate::decode::{FadeIn, LockFreeSource, SymphoniaDecoder};
+use crate::device;
 use crate::error::{AudioError, Result};
 
 /// 淡入时长：重建式 seek 从任意波形位置起播，不在零点就是爆音；60ms 够抹平又听不出爬升。
@@ -27,6 +28,8 @@ pub struct RodioBackend {
     /// 播放器是否已「停」（`stop()` 之后、尚未重新装载）。`stop()` 只立标志，真正丢掉音源
     /// 要等下一次 `periodic_access`（约 5ms），那几毫秒里 `empty()` 仍是 `false`。
     stopped: bool,
+    /// 当前输出设备的稳定标识；`None` 表示跟随系统默认。
+    device_id: Option<String>,
 }
 
 struct Loaded {
@@ -39,46 +42,75 @@ struct Loaded {
     playing: bool,
 }
 
+/// 打开指定设备的输出流，返回流与它实际对应的设备标识。
+///
+/// 标识过期、设备已拔出时回退到系统默认设备（此时标识视为「跟随默认」）。
+fn open_sink(device_id: Option<&str>) -> Result<(MixerDeviceSink, Option<String>)> {
+    let selected = device_id.and_then(|id| device::resolve_device(id).map(|device| (id, device)));
+    if device_id.is_some() && selected.is_none() {
+        log::warn!("选定的输出设备已不可用，回退到系统默认设备");
+    }
+
+    let (builder, resolved_id) = match selected {
+        Some((id, cpal_device)) => (DeviceSinkBuilder::from_device(cpal_device), Some(id)),
+        None => (DeviceSinkBuilder::from_default_device(), None),
+    };
+
+    let builder = builder.map_err(|err| AudioError::DeviceOpen(err.to_string()))?;
+    // `open_sink_or_fallback` 失败时会在同一台设备上试其它可用配置，不换设备
+    let sink = builder
+        .open_sink_or_fallback()
+        .map_err(|err| AudioError::DeviceOpen(err.to_string()))?;
+
+    Ok((sink, resolved_id.map(str::to_owned)))
+}
+
+/// 组装一条完整的解码链, symphonia 解码 → 无锁线程隔离 → 重采样到设备 → 淡入。
+/// 目标采样率与声道数由 `sink` 决定：换设备时要按新流重建，不能沿用旧的。
+fn build_source(sink: &MixerDeviceSink, path: &Path, start: Duration) -> Result<BuiltSource> {
+    let mut decoder = SymphoniaDecoder::new(path)?;
+    let duration = decoder.total_duration().unwrap_or(Duration::ZERO);
+
+    if !start.is_zero() {
+        decoder.seek(start)?;
+    }
+
+    let channels = sink.config().channel_count();
+    let sample_rate = sink.config().sample_rate();
+
+    let source = LockFreeSource::new(decoder)?;
+
+    // rodio 内部重采样依赖 `source.current_span_len()`，而 `LockFreeSource`
+    // 恒返回 `None`，高采样率音轨会以降速播放
+    let resampled = UniformSourceIterator::new(source, channels, sample_rate);
+
+    // 淡入按输出采样率算，必须放在重采样之后
+    let faded = FadeIn::new(resampled, FADE_IN, sample_rate.get(), channels.get());
+
+    Ok((Box::new(faded), duration))
+}
+
 impl RodioBackend {
     pub fn open() -> Result<Self> {
-        let device = DeviceSinkBuilder::open_default_sink()
-            .map_err(|err| AudioError::DeviceOpen(err.to_string()))?;
+        Self::open_with_device(None)
+    }
 
-        let player = Player::connect_new(device.mixer());
+    /// `device_id` 为 `None` 时跟随系统默认设备。
+    pub fn open_with_device(device_id: Option<&str>) -> Result<Self> {
+        let (sink, device_id) = open_sink(device_id)?;
+
+        let player = Player::connect_new(sink.mixer());
         // 新建的 Player 默认就是播放中，先压回暂停，避免 load 之后立刻出声
         player.pause();
 
         Ok(Self {
-            device,
+            device: sink,
             player,
             current: None,
             volume: 1.0,
             stopped: false,
+            device_id,
         })
-    }
-
-    /// 组装一条完整的解码链, symphonia 解码 → 无锁线程隔离 → 重采样到设备 → 淡入。
-    fn build_source(&self, path: &Path, start: Duration) -> Result<BuiltSource> {
-        let mut decoder = SymphoniaDecoder::new(path)?;
-        let duration = decoder.total_duration().unwrap_or(Duration::ZERO);
-
-        if !start.is_zero() {
-            decoder.seek(start)?;
-        }
-
-        let channels = self.device.config().channel_count();
-        let sample_rate = self.device.config().sample_rate();
-
-        let source = LockFreeSource::new(decoder)?;
-
-        // rodio 内部重采样依赖 `source.current_span_len()`，而 `LockFreeSource`
-        // 恒返回 `None`，高采样率音轨会以降速播放
-        let resampled = UniformSourceIterator::new(source, channels, sample_rate);
-
-        // 淡入按输出采样率算，必须放在重采样之后
-        let faded = FadeIn::new(resampled, FADE_IN, sample_rate.get(), channels.get());
-
-        Ok((Box::new(faded), duration))
     }
 
     /// 清空队列并把新音源接上，同时恢复之前的音量。
@@ -101,17 +133,50 @@ impl RodioBackend {
         let path = current.path.clone();
         let start = current.base;
 
-        let (source, _) = self.build_source(&path, start)?;
+        let (source, _) = build_source(&self.device, &path, start)?;
         self.player.clear();
         self.player.set_volume(self.volume);
         self.player.append(source);
+        Ok(())
+    }
+
+    /// 换到另一条输出流上。先把新流建好、曲目接上，成功之后才替换旧流 ——
+    /// 中途失败时旧流原封不动，声音不会断。
+    fn apply_device(&mut self, device_id: Option<&str>) -> Result<()> {
+        let (sink, resolved_id) = open_sink(device_id)?;
+
+        let player = Player::connect_new(sink.mixer());
+        player.set_volume(self.volume);
+        player.pause();
+
+        // 从「此刻播到的位置」续上，不能用 `current.base`：base 只在 load / seek 时更新，
+        // 拿它重建会把上次手动跳转之后播过的那一段全丢掉，进度直接退回去。
+        let resume_at = self.current.is_some().then(|| self.position());
+
+        if let (Some(current), Some(start)) = (self.current.as_ref(), resume_at) {
+            let (source, _) = build_source(&sink, &current.path, start)?;
+            player.append(source);
+            if current.playing {
+                player.play();
+            }
+        }
+
+        self.device = sink;
+        self.player = player;
+        self.device_id = resolved_id;
+        self.stopped = false;
+
+        // 新流以 start 为基准，base 必须跟着走，否则 `position()` 会重复计入
+        if let (Some(current), Some(start)) = (self.current.as_mut(), resume_at) {
+            current.base = start;
+        }
         Ok(())
     }
 }
 
 impl AudioBackend for RodioBackend {
     fn load(&mut self, path: &Path, autoplay: bool) -> Result<Duration> {
-        let (source, duration) = self.build_source(path, Duration::ZERO)?;
+        let (source, duration) = build_source(&self.device, path, Duration::ZERO)?;
         self.swap_in(source, autoplay);
 
         self.current = Some(Loaded {
@@ -173,7 +238,7 @@ impl AudioBackend for RodioBackend {
             position
         };
 
-        let (source, _) = self.build_source(&path, target)?;
+        let (source, _) = build_source(&self.device, &path, target)?;
         self.swap_in(source, was_playing);
 
         self.current = Some(Loaded {
@@ -206,5 +271,13 @@ impl AudioBackend for RodioBackend {
 
     fn is_finished(&self) -> bool {
         self.player.empty()
+    }
+
+    fn set_device(&mut self, device: Option<&str>) -> Result<()> {
+        self.apply_device(device)
+    }
+
+    fn current_device(&self) -> Option<String> {
+        self.device_id.clone()
     }
 }

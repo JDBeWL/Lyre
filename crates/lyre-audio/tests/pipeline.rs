@@ -320,6 +320,58 @@ fn commands_after_a_failed_device_open_keep_reporting() {
 }
 
 #[test]
+fn enumerate_devices_reports_a_list() {
+    let (handle, rx, _state) = harness();
+
+    handle.send(PlayerCommand::EnumerateDevices);
+
+    let event = wait_for(&rx, |e| matches!(e, PlayerEvent::Devices(_))).expect("应当收到设备列表");
+    match event {
+        // 没声卡的机器上拿到空列表也是正常结果，这里只要求列表本身可用
+        PlayerEvent::Devices(devices) => {
+            assert!(devices.iter().all(|device| !device.id.is_empty()));
+        }
+        _ => unreachable!(),
+    }
+}
+
+#[test]
+fn selecting_a_device_gets_an_acknowledgement() {
+    let (handle, rx, _state) = harness();
+
+    handle.send(PlayerCommand::SetDevice { id: None });
+
+    let event = wait_for(&rx, |e| matches!(e, PlayerEvent::DeviceChanged { .. }))
+        .expect("切换设备应当有回执");
+    // `None` 表示跟随系统默认，回执里的 name 是那一刻默认设备的友好名
+    assert!(matches!(event, PlayerEvent::DeviceChanged { id: None, .. }));
+}
+
+#[test]
+fn switching_device_mid_playback_does_not_report_the_track_as_ended() {
+    let (handle, rx, state) = harness();
+
+    handle.send(PlayerCommand::Load {
+        path: PathBuf::from("/music/夢我夢中.flac"),
+        autoplay: true,
+    });
+    wait_for(&rx, |e| matches!(e, PlayerEvent::Loaded { .. }));
+    // 先让它播一会儿，`seen_content` 才会置真 —— 之后 empty() 的结论才被采信
+    std::thread::sleep(Duration::from_millis(150));
+
+    // 换流的那一瞬间新音源还没出声，empty() 会短暂为 true
+    state.finished.store(true, Relaxed);
+    handle.send(PlayerCommand::SetDevice { id: None });
+
+    let deadline = Instant::now() + Duration::from_millis(500);
+    while Instant::now() < deadline {
+        if let Ok(PlayerEvent::Ended) = rx.recv_timeout(Duration::from_millis(50)) {
+            panic!("换设备不该被当成播放结束，否则界面会当场跳下一曲");
+        }
+    }
+}
+
+#[test]
 fn dropping_the_handle_shuts_the_thread_down() {
     let (handle, rx, _state) = harness();
     handle.send(PlayerCommand::Load {
