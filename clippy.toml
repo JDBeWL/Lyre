@@ -1,5 +1,3 @@
 # clippy 配置。
-# 测试里 unwrap/expect 是正当的断言手段（大量 store / theme / shell 用例都在用），
-# 只让它们在生产代码里报警。这两个开关要求 Rust >= 1.71。
 allow-unwrap-in-tests = true
 allow-expect-in-tests = true

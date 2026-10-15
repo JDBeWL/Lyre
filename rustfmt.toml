@@ -1,5 +1,4 @@
-# Lyre —— 统一格式化配置
-# 仅使用 stable 选项，无需 unstable_features。
+# 统一格式化配置
 
 edition = "2024"
 max_width = 100

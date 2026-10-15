@@ -10,7 +10,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 rust-version = "1.98.1"
 license = "MIT OR Apache-2.0"
@@ -26,7 +26,7 @@ serde_json = "1"
 walkdir = "2"
 
 # gpui-pre 是 Zed main 的快照分叉，为的是 gpui-component 的 Input（中文 IME）/Menu/Popover。
-# 必须钉 `=0.3.8`：gpui-component 钉死了它，放开会解析出两份 gpui 而类型不匹配。
+# 必须使用 `=0.3.8`：gpui-component ，否则会解析出两份 gpui 而类型不匹配。
 gpui = { package = "gpui-pre", version = "=0.3.8" }
 gpui-platform = { package = "gpui-pre-platform", version = "=0.3.8" }
 gpui-component = "0.7.1"
