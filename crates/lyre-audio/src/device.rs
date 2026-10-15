@@ -1,7 +1,6 @@
 //! 输出设备枚举与稳定标识解析。
-//!
 //! `id` 是 cpal 各平台的原生稳定标识（Windows 为 WASAPI 的 endpoint ID、macOS 为 `CoreAudio`
-//! 的 DeviceUID、Linux 为 ALSA 的 PCM 名），可以落盘；友好名会随驱动更新或系统语言变化，只能显示。
+//! 的 DeviceUID、Linux 为 ALSA 的 PCM 名），可以落盘；友好名随驱动更新或系统语言变化，只能显示。
 
 use rodio::cpal;
 use rodio::cpal::traits::{DeviceTrait, HostTrait};

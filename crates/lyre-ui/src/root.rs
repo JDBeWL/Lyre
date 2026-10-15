@@ -1,5 +1,5 @@
-//! 根视图：只做布局与装配。gpui 的脏标记会打到所有祖先，进度每秒十次通知会连带重渲染整棵树（实测约 10% 单核）。
-//! 不 `observe` 播放实体只省掉根视图自己那份重算；高频组件各自订阅 `PlaybackEntity`，撤销入口收敛在这里。
+//! 根视图只做布局与装配。gpui 的脏标记打到所有祖先：进度通知会连带重绘整棵树（实测约 10% 单核）。
+//! 不 `observe` 播放实体只省掉根视图自己那份重算，高频组件各自订阅 `PlaybackEntity`。
 
 use crate::common::toast::ToastEntity;
 use crate::components::{
@@ -46,7 +46,7 @@ pub struct RootView {
     bottom_bar: Entity<BottomBar>,
     top_bar: Entity<TopBar>,
     settings_panel: Entity<SettingsPanel>,
-    /// 只用来在落盘前问一句「恢复播放位置开着吗」，不 observe。
+    /// 只在落盘前读「恢复播放位置」开关，不 observe。
     settings: Entity<SettingsEntity>,
     toast: Entity<ToastEntity>,
     focus: FocusHandle,
@@ -109,7 +109,6 @@ impl RootView {
             cx.new(|cx| AlbumGrid::new(library.clone(), shell.clone(), covers.clone(), cx));
         let search = cx.new(|cx| SearchBox::new(window, library.clone(), cx));
         let sidebar = cx.new(|cx| Sidebar::new(shell.clone(), library.clone(), covers.clone(), cx));
-        // 全局只有顶栏那一个 `SearchBox`，搜索页不自建第二个。
         let home = cx.new(|cx| HomeView::new(shell.clone(), library.clone(), covers.clone(), cx));
         let lyrics = cx.new(|cx| LyricsView::new(playback.clone(), shell.clone(), cx));
         let search_page =
@@ -140,8 +139,7 @@ impl RootView {
         let top_bar = cx.new(|cx| TopBar::new(shell.clone(), library.clone(), search.clone(), cx));
         let toast = cx.new(ToastEntity::new);
 
-        // 必须在下面的订阅建立之前装回来：`load` 会发 `TrackChanged`，那支回调会记一笔最近播放
-        // 并把 resume.json 改写成 0 秒，正好抹掉要恢复的位置
+        // 必须在下面的订阅建立之前装回来：`load` 发的 `TrackChanged` 会把 resume.json 抹成 0 秒。
         if stored.resume_position {
             resume::restore_resume(&playback, &library, cx);
         }
@@ -164,8 +162,7 @@ impl RootView {
                 PlaybackEvent::StateChanged => {
                     resume::save_resume(&this.playback, &this.settings, cx);
                 }
-                // 设备列表由底栏自己订阅刷新，根视图不关心
-                // 输出模式与设备列表分别由设置面板、底栏自己订阅刷新
+                // 输出模式与设备列表由设置面板、底栏各自订阅刷新
                 PlaybackEvent::VolumeChanged
                 | PlaybackEvent::DevicesChanged
                 | PlaybackEvent::OutputModeChanged => {}
@@ -196,7 +193,7 @@ impl RootView {
                     this.toast
                         .update(cx, |toast, cx| toast.show_plain(message, cx));
                 }
-                // 导入链路的失败（对话框开不了 / 扫描线程起不来）用底部提示告知
+                // 导入链路的失败：对话框开不了 / 扫描线程起不来
                 LibraryEvent::Failed(message) => {
                     let message = message.clone();
                     this.toast

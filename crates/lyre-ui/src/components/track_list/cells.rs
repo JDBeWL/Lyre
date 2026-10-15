@@ -16,7 +16,6 @@ use super::{
 /// 双行阈值：行高 >= 它才画两行。必须落在 [`Density`](crate::shell::Density) 的两档之间（紧凑 40px / 舒适 52px）。
 const TWO_LINE_MIN: f32 = 48.0;
 
-/// 勾选框：选中态只画在这里，不进 `RowState` 的底色。
 pub(super) fn check_cell(
     index: usize,
     track: TrackId,
@@ -127,7 +126,6 @@ pub(super) fn title_cell(
         .child(
             div()
                 .min_w_0()
-                // 艺术家段是 `flex_shrink(2.0)`：文本过长时艺术家先被截断
                 .flex_shrink(1.0)
                 .truncate()
                 .text_size(px(theme::FONT_TRACK))

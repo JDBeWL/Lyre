@@ -70,10 +70,8 @@ struct AudioThread {
     /// 最近一次成功装载的曲目。切输出模式之后要用它把播放接回原位置 ——
     /// 位置与播放状态本身从快照读，不另存一份，免得两份状态各自漂移。
     current: Option<PathBuf>,
-    /// 用户选定的输出设备；`None` 表示跟随系统默认。
-    ///
-    /// 拔掉时**不清空** —— 这里的「选定」是用户意图，插回来还要自动切回去。
-    /// 设备不在时用系统默认顶上，那由 [`AudioThread::target_now`] 决定。
+    /// 用户选定的输出设备；`None` 表示跟随系统默认，拔掉时不清空。
+    /// 这是用户意图，插回来要自动切回；设备不在时由 [`AudioThread::target_now`] 用系统默认顶上。
     device: Option<String>,
     /// 上一次真正开流用的目标。设备插回来时它和当前目标会不一样，据此判断要不要切回去。
     last_target: Option<String>,
@@ -120,8 +118,7 @@ impl AudioThread {
         self.backend.as_deref_mut()
     }
 
-    /// 按当前输出模式开一条流。要的是独占却没开起来时退回共享 —— 独占是用户显式打开的，
-    /// 静默降级会让人以为「选了独占却没效果」，所以额外发一条错误说明原因。
+    /// 按当前输出模式开一条流。要独占却没开起来时退回共享，并额外发一条错误而不是静默降级。
     fn open_backend(&mut self) -> Result<(Box<dyn AudioBackend>, OutputMode, String)> {
         let device = self.target_now();
         let events = self.events.clone();
@@ -253,10 +250,8 @@ impl AudioThread {
         let _ = self.events.send(PlayerEvent::State(self.snapshot.state()));
     }
 
-    /// 把后端实际用的输出口径播报出去。
-    ///
-    /// 独占的口径会随曲目变（要按声源重开流），只在创建后端时报一次的话，
-    /// 界面上会一直停在第一首协商到的口径上，看着像「切歌没重新协商」。
+    /// 把后端实际用的输出口径播报出去。独占口径会随曲目变（要按声源重开流），
+    /// 只在创建后端时报一次的话，界面会停在第一首协商到的口径上。
     fn announce_output(&self) {
         let Some(backend) = self.backend.as_deref() else {
             return;
@@ -456,13 +451,12 @@ impl AudioThread {
                         self.snapshot.set_state(PlaybackState::Playing);
                         self.emit_state();
                     }
-                    // 音源重建失败：退回 Idle，界面不该在静音时显示「正在播放」
+                    // 重建失败：退回 Idle，界面不该在静音时显示「正在播放」
                     Some(Err(err)) => {
                         self.snapshot.set_state(PlaybackState::Idle);
                         let _ = self.events.send(PlayerEvent::Error(err.to_string()));
                         self.emit_state();
                     }
-                    // 设备没打开过就什么都不做
                     None => {}
                 }
             }
@@ -507,7 +501,6 @@ impl AudioThread {
                     Some(Err(err)) => {
                         let _ = self.events.send(PlayerEvent::Error(err.to_string()));
                     }
-                    // 设备没打开过还是什么都不做
                     None => {}
                 }
             }
@@ -515,9 +508,8 @@ impl AudioThread {
             PlayerCommand::SetVolume(volume) => {
                 let clamped = volume.clamp(0.0, 1.0);
                 self.snapshot.set_volume(clamped);
-                // 不为了调音量去开一条输出流：启动时下发存档音量是最早到的一条命令，
-                // 让它开流等于每次启动都先建一条共享流（系统音量合成器里会留下这个进程的会话），
-                // 随后切独占又要拆掉。设备留到真正装载时再碰，音量由 `backend()` 补发。
+                // 不为调音量开输出流：启动时下发的存档音量是最早到的一条命令，
+                // 开流会让音量合成器留下会话；设备留到装载时再碰，音量由 `backend()` 补发。
                 if let Some(backend) = self.backend.as_deref_mut() {
                     backend.set_volume(clamped);
                 }

@@ -50,7 +50,7 @@ impl Render for TopBar {
             .flex()
             .items_center()
             .bg(theme::chrome())
-            // 左组：后退 / 前进贴左缘，余量是拖拽区。与右组同为 `flex_1` —— 搜索框居中靠这个。
+            // 左组余量是拖拽区，与右组同为 `flex_1` 才让搜索框居中。
             .child(
                 div()
                     .flex_1()
@@ -106,7 +106,7 @@ impl Render for TopBar {
                     ))
                     .child(drag_area()),
             )
-            // 中组：搜索框。整条顶栏唯一能让步的一块 —— 定宽会把两组按钮挤出窗口，关闭键就点不到了。
+            // 中组：搜索框。顶栏唯一能让步的一块 —— 定宽会把两组按钮挤出窗口，关闭键就点不到了。
             .child(
                 div()
                     .flex_1()
@@ -117,7 +117,6 @@ impl Render for TopBar {
                     .px(px(theme::GAP_MD))
                     .child(self.search.clone()),
             )
-            // 右组：拖拽区 + 设置入口 + 窗口控件，贴右缘。
             .child(
                 div()
                     .flex_1()
@@ -188,7 +187,7 @@ fn nav_button(
 
 type NavClick = Box<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static>;
 
-/// 设置入口：右端那颗齿轮。本应用没有账户体系。
+/// 设置入口：右端那颗齿轮。
 fn settings_button(
     shell: Entity<ShellEntity>,
     library: Entity<LibraryEntity>,
@@ -252,7 +251,6 @@ mod tests {
         (window - 2.0 * side - 2.0 * theme::GAP_MD).max(0.0)
     }
 
-    /// 顶栏放不进窗口时，被推出右缘的是最大化 / 关闭 —— 窗口就再也关不掉了。
     #[test]
     fn 顶栏在最小窗口也放得下() {
         for width in [CLIENT_MIN, 592.0, 648.0, 860.0, 1180.0, 1920.0] {
@@ -262,7 +260,6 @@ mod tests {
                 pill_width(width, side_min())
             );
         }
-        // 宽到够用时搜索框要能回到设计宽。
         assert!(
             pill_width(1920.0, side_min()) >= theme::SEARCH_W,
             "最大化窗口都放不下定宽搜索框：{}",
@@ -270,8 +267,7 @@ mod tests {
         );
     }
 
-    /// 两组等宽是搜索框居中的前提，而留位只能按更宽的那一组：右组一旦比左组窄，
-    /// 三颗导航按钮就会被挤到搜索框那边去。
+    /// 留位按更宽的一组：右组一旦比左组窄，三颗导航按钮会被挤到搜索框那边。
     #[test]
     fn 留位按的是右组() {
         assert!(

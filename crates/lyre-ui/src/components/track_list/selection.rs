@@ -9,7 +9,6 @@ use crate::platform::*;
 use super::TrackList;
 
 impl TrackList {
-    /// 行渲染要弱引用回传事件（拖动、播放）；这里不需要 `&self`。
     pub(super) fn weak(cx: &Context<Self>) -> WeakEntity<Self> {
         cx.entity().downgrade()
     }
@@ -64,7 +63,7 @@ impl TrackList {
     }
 
     /// 勾选中的曲目，按当前可见行顺序；顺手把已经看不见的（搜索筛掉的、被移除的）从状态里剪掉。
-    /// 渲染与四个批量动作都走它，「已选 N」和「按 N 动手」因此是同一个数。
+    /// 渲染与四个批量动作都走它。
     pub(super) fn chosen(&mut self, cx: &mut App) -> Vec<TrackId> {
         if self.selected.is_empty() {
             return Vec::new();

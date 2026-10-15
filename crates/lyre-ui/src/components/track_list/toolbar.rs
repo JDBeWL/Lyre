@@ -11,7 +11,7 @@ use crate::theme;
 
 use super::{TrackList, TrackListEvent};
 
-/// 工具条渲染需要的全部数值（一起从曲库读出，故打包）。
+/// 工具条渲染需要的全部数值，一次从曲库读出。
 #[allow(clippy::struct_excessive_bools)]
 pub(super) struct ToolbarState {
     /// 可见行数（过滤生效时小于 `total`）
@@ -28,19 +28,15 @@ pub(super) struct ToolbarState {
     pub(super) scope: Option<String>,
     /// 上方已有页头（详情页头图 / 搜索页大标题）时不再画大标题；列头照常画
     pub(super) headed_elsewhere: bool,
-    /// 停在搜索页（而不只是「有搜索词」），决定要不要拿掉「排序 / 清空」
     pub(super) in_search: bool,
-    /// 多选模式是否开着 —— 决定那颗按钮的文案与状态
     pub(super) selecting: bool,
 }
 
-/// 拖拽排序的成立条件：三个条件缺一个，拖出来的顺序都不可预期。
 pub(super) fn can_reorder(in_collection: bool, has_query: bool, rows: usize) -> bool {
     in_collection && !has_query && rows > 1
 }
 
 /// 页头大标题的文案：搜索词 > 作用域名 > 「曲库 · N 首」。
-/// `scope` 为空串 / 纯空白时跳过它，落到「曲库 · N 首」。
 fn header_summary(filtering: bool, scope: Option<&str>, count: usize, total: usize) -> String {
     if filtering {
         format!("找到 {} / {} 首", thousands(count), thousands(total))

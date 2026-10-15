@@ -1,4 +1,4 @@
-//! 搜索框，用 `gpui_component` 的 `Input` 而不是自研；全局只有顶栏这一份输入状态。
+//! 搜索框，全局只有顶栏这一份输入状态。
 //! 根视图的裸字母快捷键要 `&& !Input` 避让 `Input` 的 key context，否则打字会触发播放快捷键。
 
 use std::time::Duration;
@@ -12,7 +12,7 @@ const DEBOUNCE: Duration = Duration::from_millis(120);
 
 #[derive(Clone, Copy, Debug)]
 pub enum SearchBoxEvent {
-    /// 用户开始打字：框是快捷入口，在那里打字时主区可能停在任意一页，靠这个事件把用户带到能看见结果的那页。
+    /// 用户开始打字：主区可能停在任意一页，靠这个事件把用户带到能看见结果的那页。
     /// 不带载荷：查询词只存在 `LibraryEntity::query` 里。
     Typing,
     /// 框获得焦点。点它就该切到搜索页，否则点了界面没反应。
@@ -58,7 +58,7 @@ impl SearchBox {
         }
     }
 
-    /// 别处把查询词清掉之后，框里留着旧文字就是在指着一个已经不存在的过滤。
+    /// 别处把查询词清掉后框里要跟上，否则留着的是一个已经不存在的过滤。
     /// 只镜像不是我们提交的那份：防抖的 120ms 里用户可能又打了字，旧值盖掉新值等于吃掉 keystroke。
     fn mirror_query(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let query = self.library.read(cx).query().to_string();
@@ -121,7 +121,6 @@ impl SearchBox {
     }
 }
 
-/// 输入事件处理。做成自由函数而不是方法：建订阅时还没有 `Self` 实例。
 fn on_input_event(
     this: &mut SearchBox,
     _source: &Entity<InputState>,
@@ -190,7 +189,6 @@ impl Render for SearchBox {
                 }
             })
             .child(
-                // `.appearance(false)` 关掉 `Input` 自带的底与 1px 边框，那层底取自组件库主题。
                 div()
                     .flex_1()
                     .min_w_0()

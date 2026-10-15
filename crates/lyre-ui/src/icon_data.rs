@@ -1,4 +1,4 @@
-//! 描边类图标的 SVG 数据，从 Lucide v0.544.0（`lucide-static`，ISC）批量生成，不要手工编辑。
+//! 描边类图标的 SVG 数据，从 Lucide v0.544.0（`lucide-static`，ISC）批量生成，手工改动会在下次生成时被覆盖。
 
 use crate::icon::Glyph;
 

@@ -1,5 +1,4 @@
-//! 左键展开的下拉菜单触发器：`ContextMenuExt::context_menu` 只响应右键，
-//! `DropdownMenu` 又要求触发器实现 `Selectable`，所以这里只做 trait 转发。
+//! 左键展开的下拉菜单触发器：`ContextMenuExt::context_menu` 只响应右键，`DropdownMenu` 又要求触发器实现 `Selectable`。
 
 use std::rc::Rc;
 
@@ -77,7 +76,7 @@ pub fn dropdown(
 /// `max_w`、不裁横向溢出，所以宽度必须在文字这一层收。
 const LABEL_MAX_W: f32 = 320.0;
 
-/// 一条文字可能很长的菜单项：限宽 + 省略号。限的是最宽，不是固定宽。
+/// 一条文字可能很长的菜单项：限最宽 + 省略号，不是固定宽。
 /// 不加 tooltip：`.tooltip()` 要求元素有 id，而重名歌单 / 专辑会让两项撞同一个 id。
 pub fn long_item(text: impl Into<SharedString>) -> PopupMenuItem {
     let text = text.into();
@@ -105,7 +104,7 @@ type OnOpen = Rc<dyn Fn(&mut App)>;
 type OnPlay = Rc<dyn Fn(TrackId, &mut App)>;
 
 /// 菜单动作在宿主侧引起的副作用：曲库行要进专辑 / 艺术家前记住滚动落点、移除后播一行动画；
-/// 队列行与搜索结果行用 [`TrackMenuHooks::none`]。这两件事塞不进菜单本身：菜单只认识 `Entity<LibraryEntity>`。
+/// 队列行与搜索结果行用 [`TrackMenuHooks::none`]。
 #[derive(Clone, Default)]
 pub struct TrackMenuHooks {
     play: Option<OnPlay>,
@@ -160,8 +159,7 @@ pub fn track_context_menu(
     move |menu, _window, cx| {
         let mut menu = menu;
 
-        // 专辑 / 艺术家名拖到「菜单真的被打开」这一刻才取：
-        // 每行每次重绘都克隆两个 String 不值得，而菜单几秒才展开一次。
+        // 专辑 / 艺术家名拖到「菜单真的被打开」这一刻才取，避免每行每次重绘都克隆两个 String。
         let (album, artist) = {
             let read = library.read(cx);
             let track = read.playlist().by_id(track_id);
@@ -189,8 +187,7 @@ pub fn track_context_menu(
         // 用 lyre-core 的分组键判定而不是自己写 `is_empty`：分组、下钻筛选、菜单三处规则必须一致，
         // 否则会出现「菜单里能进这张专辑，进去却一首都没有」。
         let has_album = lyre_core::album_key_str(album.as_deref()) != UNKNOWN_ALBUM;
-        // 多人字段只给第一位一个入口（其余人从艺术家页 / 搜索进）：整串「甲/乙」在分组里不存在，
-        // 而十个人的合作曲也不该把右键菜单撑成一屏。
+        // 多人字段只给第一位一个入口（其余人从艺术家页 / 搜索进）：整串「甲/乙」在分组里不存在。
         let artists: Vec<&str> = lyre_core::artist_keys_str(artist.as_deref())
             .into_iter()
             .filter(|key| *key != UNKNOWN_ARTIST)
@@ -226,7 +223,6 @@ pub fn track_context_menu(
             }));
         }
 
-        // 加进歌单：每个已存在的歌单一项。
         let lists: Vec<(lyre_core::CollectionId, String, bool)> = {
             let library = library.read(cx);
             library
@@ -285,8 +281,7 @@ pub fn track_context_menu(
     }
 }
 
-/// 分组卡（专辑 / 艺术家）代表的东西。不复用 `NavSection`：那个枚举有第三个 `Tracks` 分支，
-/// 会逼出 `_ => artist` 这种看不出对错的兜底。
+/// 分组卡（专辑 / 艺术家）代表的东西。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GroupKind {
     Album,

@@ -11,13 +11,13 @@ use rodio::{ChannelCount, DeviceSinkBuilder, MixerDeviceSink, Player, SampleRate
 
 use crate::backend::AudioBackend;
 use crate::decode::{
-    ChannelConvertSource, GainControl, GainRamp, LfeConfig, LockFreeSource, SoftClip,
-    SymphoniaDecoder,
+    ChannelConvertSource, GainControl, GainRamp, LfeConfig, LockFreeSource, SoftClip, TrackDecoder,
+    WhenEmpty,
 };
 use crate::device;
 use crate::error::{AudioError, Result};
 
-/// 淡入、淡出与换设备交叉淡化的时长。60ms 够抹平接缝又听不出爬升。
+/// 淡入、淡出与换设备交叉淡化的时长。60ms 够抹平接缝。
 const FADE: Duration = Duration::from_millis(60);
 /// 淡出结束后再多留一会儿才丢旧输出流，确保增益真的走到了 0。
 const FADE_MARGIN: Duration = Duration::from_millis(20);
@@ -44,7 +44,7 @@ pub struct RodioBackend {
     previous: Option<Previous>,
     volume: f32,
     /// 播放器是否已「停」（`stop()` 之后、尚未重新装载）。`stop()` 只立标志，真正丢掉音源
-    /// 要等淡出结束（或下一次 `periodic_access`）。
+    /// 要等淡出结束，由 `tick()` 与各公共入口推进。
     stopped: bool,
     /// 换设备时是否做交叉淡化。
     smooth_switch: bool,
@@ -87,8 +87,8 @@ impl Pending {
     }
 }
 
-/// 淡出中的上一条输出流。两个句柄都要持有到到点为止：丢掉 `Player` 会立刻停掉它的音源，
-/// 丢掉 `MixerDeviceSink` 会直接关掉整条流 —— 那样淡出就白做了。
+/// 淡出中的上一条输出流。两个句柄都要持有到点：丢掉 `Player` 会立刻停掉它的音源，
+/// 丢掉 `MixerDeviceSink` 会关掉整条流。
 struct Previous {
     _player: Player,
     _device: MixerDeviceSink,
@@ -127,14 +127,13 @@ fn build_source(sink: &MixerDeviceSink, path: &Path, start: Duration) -> Result<
     build_source_for(config.sample_rate(), config.channel_count(), path, start)
 }
 
-/// 与 [`build_source`] 同一条链路，只差目标格式由参数给出 —— 不碰设备也测得动。
 fn build_source_for(
     sample_rate: SampleRate,
     target_channels: ChannelCount,
     path: &Path,
     start: Duration,
 ) -> Result<BuiltSource> {
-    let mut decoder = SymphoniaDecoder::new(path)?;
+    let mut decoder = TrackDecoder::open(path)?;
     let duration = decoder.total_duration().unwrap_or(Duration::ZERO);
 
     if !start.is_zero() {
@@ -144,11 +143,12 @@ fn build_source_for(
     let source_channels =
         std::num::NonZeroU16::new(decoder.channels()).unwrap_or(ChannelCount::MIN);
 
-    let source = LockFreeSource::new(decoder)?;
+    // rodio 的 mixer 在音频回调线程上拉，那里不能阻塞：通道空着只能吐静音顶住
+    let source = LockFreeSource::new(decoder, WhenEmpty::PadWithSilence)?;
 
-    // 这一步只对齐采样率、保持声道：LFE 低通要按声源的采样率算，先下混会把它的
-    // 状态机从 Source 层挪进解码器。`LockFreeSource` 恒返回 `current_span_len() == None`，
-    // rodio 的内部重采样不会按跨度分块，所以必须在交给 mixer 之前显式对齐。
+    // 这一步只对齐采样率、保持声道：LFE 低通要按声源的采样率算，必须排在下混之前。
+    // `LockFreeSource` 恒返回 `current_span_len() == None`，rodio 的内部重采样
+    // 不会按跨度分块，所以必须在交给 mixer 之前显式对齐。
     let resampled = UniformSourceIterator::new(source, source_channels, sample_rate);
     let converted = ChannelConvertSource::new(resampled, target_channels, LfeConfig::default());
 
@@ -205,8 +205,7 @@ impl RodioBackend {
         }
     }
 
-    /// 收尾：到点的挂起交接、到点的旧输出流。每个公共入口都调一次 ——
-    /// 控制线程每 50ms 查一次进度，所以实际延迟不会超过一拍。
+    /// 收尾：落地到点的挂起交接，丢弃到点的旧输出流。
     fn sweep(&mut self) {
         let now = Instant::now();
 
@@ -224,7 +223,6 @@ impl RodioBackend {
             .as_ref()
             .is_some_and(|previous| previous.deadline <= now)
         {
-            // 增益已经走到 0，此刻断开旧流听不出接缝
             self.previous = None;
         }
     }
@@ -250,7 +248,7 @@ impl RodioBackend {
         }
     }
 
-    /// 交付下一段音频。链路正在出声就先淡出再换；已经静着就直接换 —— 没有声音就没有爆音可消。
+    /// 交付下一段音频。链路正在出声就先淡出再换；已经静着就直接换。
     fn hand_off(&mut self, action: Handoff) {
         // 已经在淡出：换成新动作照旧等到点交接，旧链路的增益早就推向 0 了
         if let Some(pending) = self.pending.as_mut() {
@@ -258,8 +256,7 @@ impl RodioBackend {
             return;
         }
 
-        // 「正在出声」才值得淡出。队列已经放空时（一首自然播完、随后自动切下一曲）
-        // 没有任何声音可淡，再等一拍就成了多余的起播延迟。
+        // 队列已经放空时（一首自然播完、随后自动切下一曲）没有声音可淡，再等一拍只多一次起播延迟。
         let audible = !self.player.empty()
             && self.gain.is_some()
             && self.current.as_ref().is_some_and(|current| current.playing);
@@ -288,7 +285,7 @@ impl RodioBackend {
         }
     }
 
-    /// 按当前曲目重建一条音源链路并接上（不改变播放 / 暂停状态）；没装载过时是无操作。
+    /// 按当前曲目重建一条音源链路并接上；没装载过时是无操作。
     fn rebuild_current(&mut self) -> Result<()> {
         // 旧音源整条要被换掉，挂起的交接跟着作废
         self.pending = None;
@@ -331,8 +328,8 @@ impl RodioBackend {
         let old_device = std::mem::replace(&mut self.device, sink);
         self.pending = None;
 
-        // 平滑切换：旧流继续出声、增益推向 0，几十毫秒后才断开 —— 新流预建的那段空窗被盖掉。
-        // 不平滑就按原来的行为当场断开。
+        // 平滑切换：旧流继续出声、增益推向 0，几十毫秒后才断开 —— 盖住新流预建的那段空窗。
+        // 不平滑则当场断开。
         if self.smooth_switch && self.gain.is_some() {
             if let Some(control) = self.gain.take() {
                 control.set_target(0.0);
@@ -416,8 +413,7 @@ impl AudioBackend for RodioBackend {
         self.stopped = true;
     }
 
-    /// 重建式 seek，不用 `player.try_seek()`：有界通道里已缓存几秒采样，原地跳转既复杂又不精确；
-    /// 重解一条链路的代价只是一次几十毫秒的预填充。
+    /// 重建式 seek，不用 `player.try_seek()`：有界通道里已缓存几秒采样，原地跳转既复杂又不精确。
     fn seek(&mut self, position: Duration) -> Result<()> {
         self.sweep();
 
@@ -502,7 +498,7 @@ mod tests {
     use super::*;
     use std::path::PathBuf;
 
-    /// 用例素材的采样率。挑 8k 是为了让整条链路跑得快，与格式无关。
+    /// 用例素材的采样率。挑 8k 是为了链路跑得快，与格式无关。
     const SOURCE_RATE: u32 = 8_000;
 
     /// 淡入的帧数。窗内的增益本来就在爬升，断言一律跳过它。
@@ -516,7 +512,6 @@ mod tests {
         std::num::NonZeroU16::new(value).unwrap_or(ChannelCount::MIN)
     }
 
-    /// 手写一个 16-bit PCM 的 WAV。用例自备素材，不引第三方编码库。
     fn wav(dir: &tempfile::TempDir, channels: u16, frames: usize) -> PathBuf {
         const BITS: u16 = 16;
         let block_align = channels * BITS / 8;
@@ -537,8 +532,7 @@ mod tests {
         bytes.extend_from_slice(b"data");
         bytes.extend_from_slice(&data_len.to_le_bytes());
 
-        // 每路一个常数：6 声道按 FL FR FC LFE SL SR 的次序取不同值，
-        // 这样下混系数用错、声道错位都会立刻显出来
+        // 每路一个常数：6 声道按 FL FR FC LFE SL SR 的次序取不同值
         let level = |channel: usize| [0.5_f32, 0.25, 0.2, 0.9, 0.1, 0.2][channel % 6];
         for _ in 0..frames {
             for channel in 0..channels as usize {
@@ -554,7 +548,7 @@ mod tests {
     }
 
     /// 先让解码线程把素材搬进通道再读：欠载时 `LockFreeSource` 会吐 0.0 撑流，
-    /// 那会让样本数与声道相位都对不上，这个用例就失去意义了。
+    /// 样本数与声道相位都会对不上。
     fn drain(source: Box<dyn rodio::Source<Item = f32> + Send>) -> Vec<f32> {
         std::thread::sleep(Duration::from_millis(100));
         source.collect()
@@ -624,7 +618,7 @@ mod tests {
             .expect("构建链路应当成功");
         let samples = drain(source);
 
-        // 8k → 48k 是 6 倍。倍率错了就是「高采样率音轨以降速播放」那类问题。
+        // 8k → 48k 是 6 倍。
         let expected = FRAMES * 2 * 6;
         let ratio = samples.len() as f64 / expected as f64;
         assert!(

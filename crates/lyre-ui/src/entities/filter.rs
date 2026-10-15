@@ -35,7 +35,7 @@ fn contains_ci(haystack: &str, needle: &str) -> bool {
     if needle.is_empty() {
         return true;
     }
-    // 纯 ASCII 走字节滑窗，不必逐个字符展开。
+    // 纯 ASCII 走字节滑窗。
     if haystack.is_ascii() && needle.is_ascii() {
         // `windows` 对「窗口比切片长」是直接 panic，不是返回空迭代器
         return needle.len() <= haystack.len()
@@ -152,7 +152,6 @@ mod tests {
         assert!(contains_ci("Neon", ""));
     }
 
-    /// 中日韩正文里匹配 ASCII 词元也必须命中。
     #[test]
     fn ascii_term_hits_a_multibyte_field() {
         assert!(contains_ci("夜航 Neon 西飞", "neon"));

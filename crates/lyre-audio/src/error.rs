@@ -1,9 +1,6 @@
-//! 音频链路的错误类型，保留结构、支持 `#[source]` 链，让上层能按类别判断，
-//! 而不是只能拿到一串给用户看的文字。
-//!
-//! 面向用户的文案由 [`Display`](std::fmt::Display) 提供；跨线程只传它的字符串形式
-//! （[`PlayerEvent::Error`](crate::PlayerEvent::Error) 仍是 `String`，因为 `std::io::Error`
-//! 既不 `Clone` 也不 `PartialEq`，会破坏 `PlayerEvent` 的派生）。
+//! 音频链路的错误类型：保留结构与 `#[source]` 链，面向用户的文案由 `Display` 提供。
+//! `PlayerEvent::Error` 跨线程只带文案字符串 —— `std::io::Error` 既不 `Clone`
+//! 也不 `PartialEq`，放进枚举会破坏 `PlayerEvent` 的派生。
 
 /// 音频链路错误。
 #[derive(Debug, thiserror::Error)]
@@ -19,6 +16,16 @@ pub enum AudioError {
     /// 探测容器 / 编码格式失败。
     #[error("无法识别音频格式：{0}")]
     Probe(String),
+
+    /// 认得出是什么格式，但引擎没有对应的解码实现。
+    /// 与 [`Self::Probe`] 的区别是「认不出来」还是「认出来了但放不了」 —— 后者要给出格式名。
+    #[error("不支持的音频格式：{0}")]
+    Unsupported(String),
+
+    /// 文件能打开，但一个样本都解不出来（只剩外壳、或编码不被支持）。
+    /// 必须当错误上报：静默当成「放完了」会让这首一上来就被判成结束，列表循环时看着像无声快进。
+    #[error("文件里没有可解码的音频数据")]
+    NoAudioData,
 
     /// 文件里没有音频轨。
     #[error("文件里没有音频轨")]
@@ -57,7 +64,7 @@ pub enum AudioError {
     ThreadSpawn(#[source] std::io::Error),
 
     /// 独占输出不可用（设备不支持、被占用、格式协商失败）。
-    /// 文案由独占后端给出，这里只做透传 —— 免得同一句话被套两层前缀。
+    /// 文案由独占后端给出，这里只做透传。
     #[error("{0}")]
     Exclusive(String),
 }
@@ -67,7 +74,6 @@ pub type Result<T> = std::result::Result<T, AudioError>;
 
 #[cfg(test)]
 mod tests {
-    // 不写 `use super::*`：本 crate 无同名 test 宏，但保持与全项目一致的风格。
     use super::AudioError;
 
     #[test]
@@ -80,6 +86,14 @@ mod tests {
         assert_eq!(
             AudioError::Decode("位深不支持".to_owned()).to_string(),
             "解码失败：位深不支持"
+        );
+        assert_eq!(
+            AudioError::Unsupported("WavPack".to_owned()).to_string(),
+            "不支持的音频格式：WavPack"
+        );
+        assert_eq!(
+            AudioError::NoAudioData.to_string(),
+            "文件里没有可解码的音频数据"
         );
     }
 

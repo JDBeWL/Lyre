@@ -1,7 +1,7 @@
-//! 是前代 Mercuial Player 的独立出的部分代码构成的 Symphonia 解码器
-//! 解码器本身并不依赖 GPUI ，可以被复用到其他项目
+//! Symphonia 解码器：逐样本吐交错 f32，不依赖 GPUI，也不依赖输出设备。
 
 use std::fs::File;
+use std::io::{Read, Seek};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -35,7 +35,6 @@ enum DecoderState {
     Error(String),
 }
 
-// 计算缓冲容量。
 const fn buffer_samples(sample_rate: u32, channels: u16, duration_ms: u32) -> usize {
     let want = (sample_rate as u64 * duration_ms as u64 * channels as u64) / 1000;
     if want < 4096 {
@@ -132,11 +131,28 @@ pub struct SymphoniaDecoder {
     track_id: Option<u32>,
     current_sample: u64,
     source_channels: u16,
+    /// 累计解出的样本数：把「一个样本都没有」（文件放不了，必须报错）和「正常放完」分开。
+    decoded_samples: u64,
 }
 
 impl SymphoniaDecoder {
     pub fn new(path: &Path) -> Result<Self> {
-        let file = File::open(path).map_err(AudioError::FileOpen)?;
+        let mut file = File::open(path).map_err(AudioError::FileOpen)?;
+
+        // 魔数认得出的一律拦在探测之前。扩展名可以改，改了名的 APE / WavPack / Ogg-Opus
+        // 会被这里的探测当成能播，后果不是报错而是放出满刻度噪声或全零样本。
+        // 挡回来只是这一步的职责：把它们送进对应的解码器是 [`crate::TrackDecoder`] 的事。
+        // `initialize` 只由这里建出的实例走到，所以查这一处就够。
+        let mut head = Vec::with_capacity(lyre_core::SIGNATURE_PROBE_LEN);
+        (&mut file)
+            .take(lyre_core::SIGNATURE_PROBE_LEN as u64)
+            .read_to_end(&mut head)
+            .map_err(AudioError::FileOpen)?;
+        if let Some(signature) = lyre_core::signature_of(&head) {
+            return Err(AudioError::Unsupported(signature.label().to_owned()));
+        }
+        file.rewind().map_err(AudioError::FileOpen)?;
+
         let mss = MediaSourceStream::new(Box::new(file), MediaSourceStreamOptions::default());
 
         let mut hint = Hint::new();
@@ -163,15 +179,14 @@ impl SymphoniaDecoder {
             .and_then(CodecParameters::audio)
             .ok_or(AudioError::MissingCodecParams)?;
 
-        // 报 0 采样率的畸形头（`Some(0)`）与「没写采样率」同样退默认值。
-        // 0 既让缓冲尺寸算成 0，又让下面的除法变成 inf。
+        // 报 0 的畸形采样率（`Some(0)`）按「没写」同样退默认值：0 让缓冲尺寸算成 0，除法变 inf。
         let stated_rate = params.sample_rate.filter(|rate| *rate > 0);
         let sample_rate = stated_rate.unwrap_or(44_100);
         // 声道数同样取自容器头，写 0 的畸形头退成单声道 —— 它会变成除数与帧长
         let source_channels = (params.channels.as_ref().map_or(2, Channels::count) as u16).max(1);
 
-        // 时长只按容器声明的采样率算，若拿基本的 CD 级别的 44.1kHz 去推未知采样率的流，
-        // 会得到一个看着合理、实际错误的秒数，使用 `try_from_secs_f64` 解决 inf / NaN。
+        // 时长只按容器声明的采样率算：拿 CD 级的 44.1kHz 去推未知采样率的流，
+        // 会得到一个看着合理、实际错误的秒数。`try_from_secs_f64` 挡的是 inf / NaN。
         let total_duration = match (track.num_frames, stated_rate) {
             (Some(frames), Some(rate)) => {
                 Duration::try_from_secs_f64(frames as f64 / f64::from(rate)).ok()
@@ -179,7 +194,7 @@ impl SymphoniaDecoder {
             _ => None,
         };
 
-        // 按声源的原始声道数解码。下混不在这里做 —— 目标声道数由输出设备决定，
+        // 按声源的原始声道数解码，下混不在这里做：目标声道数由输出设备决定，
         // 是播放链路上 `ChannelConvertSource` 的事。
         let buffer_duration_ms = if sample_rate <= 48_000 { 500 } else { 400 };
         let capacity = buffer_samples(sample_rate, source_channels, buffer_duration_ms);
@@ -196,6 +211,7 @@ impl SymphoniaDecoder {
             track_id: None,
             current_sample: 0,
             source_channels,
+            decoded_samples: 0,
         })
     }
 
@@ -212,13 +228,12 @@ impl SymphoniaDecoder {
         self.total_duration
     }
 
-    /// 源文件的原始声道数
+    /// 源文件的原始声道数。
     pub fn source_channels(&self) -> u16 {
         self.source_channels
     }
 
-    /// 先解出一段数据再返回，避免起播瞬间欠载。
-    /// 短文件本来就装不满缓冲，否则会被误判成坏文件。
+    /// 先解出一段数据再返回，避免起播瞬间欠载。短文件本来就装不满缓冲，不该被误判成坏文件。
     pub fn prefill(&mut self) -> Result<()> {
         if self.state == DecoderState::Uninitialized {
             self.initialize()?;
@@ -243,6 +258,13 @@ impl SymphoniaDecoder {
                 }
             }
             attempts += 1;
+        }
+
+        // 一个样本都没解出来就是「这个文件放不了」，必须当错误报上去。放在 `EndOfStream` 放行之前：
+        // 只剩外壳的文件会立刻 EOF，吞下去这首一上来就被判成放完，列表循环时像队列在无声快进。
+
+        if self.decoded_samples == 0 {
+            return Err(AudioError::NoAudioData);
         }
 
         if self.state == DecoderState::EndOfStream {
@@ -271,7 +293,7 @@ impl SymphoniaDecoder {
             };
             match format.seek(SeekMode::Accurate, seek_to) {
                 Ok(_) => {
-                    // 失败时保持原样，调用方可以继续播
+                    // 状态只在 symphonia 的 seek 成功后才改；失败时保持原样，调用方还能继续播
                     self.current_sample = target_ts;
                     self.buffer.clear();
                     decoder.reset();
@@ -323,7 +345,6 @@ impl SymphoniaDecoder {
             .make_audio_decoder(&params, &options)
             .map_err(|err| AudioError::DecoderCreate(err.to_string()))?;
 
-        // 切歌到指定位置
         if self.current_sample > 0 {
             let seek_to = SeekTo::Timestamp {
                 ts: Timestamp::new(timestamp_of(self.current_sample)),
@@ -354,7 +375,7 @@ impl SymphoniaDecoder {
             return Ok(());
         }
 
-        // 变量被破坏时也只是报错
+        // 状态是 `Ready` 却缺件时只报错，不 unwrap
         let (Some(format), Some(decoder), Some(track_id)) =
             (self.format.as_mut(), self.decoder.as_mut(), self.track_id)
         else {
@@ -371,7 +392,7 @@ impl SymphoniaDecoder {
                     self.state = DecoderState::EndOfStream;
                     break;
                 }
-                // 若是码流参数发发生变化，容器要求重建解码器
+                // 码流参数变化时 symphonia 要求重建解码器：`ResetRequired` 不是失败，接着拉包
                 Err(Error::ResetRequired) => {
                     decoder.reset();
                     continue;
@@ -396,6 +417,7 @@ impl SymphoniaDecoder {
                     self.scratch.clear();
                     let expected = self.buffer.channels;
                     Self::convert(&audio_buf, &mut self.scratch, expected);
+                    self.decoded_samples += self.scratch.len() as u64;
                     self.buffer.append(&self.scratch);
                     decoded_packets += 1;
                 }
@@ -417,8 +439,7 @@ impl SymphoniaDecoder {
     }
 
     /// 交错成 f32，不做下混：目标声道数由输出设备决定。
-    /// 解码包实际的声道数与容器声明不一致时（中途换声道配置的流）按实际布局对齐，
-    /// 不处理的话后续所有声道都会整体错位。
+    /// 包的实际声道数与容器声明不一致时（中途换声道配置的流）按实际布局对齐，否则后续声道整体错位。
     fn convert(audio_buf: &GenericAudioBufferRef<'_>, out: &mut Vec<f32>, expected: u16) {
         let actual = audio_buf.spec().channels().count();
         out.reserve(audio_buf.frames() * actual);
@@ -454,7 +475,7 @@ impl Iterator for SymphoniaDecoder {
     type Item = f32;
 
     fn next(&mut self) -> Option<f32> {
-        // 填充失败但缓冲里还有继续使用
+        // 填充失败但缓冲里还有样本，就先把这一批放完
         if (self.buffer.is_empty() || self.buffer.needs_refill())
             && let Err(err) = self.fill()
             && self.buffer.is_empty()
@@ -472,11 +493,10 @@ impl Iterator for SymphoniaDecoder {
 }
 
 fn log_error_once(message: &str) {
-    // 坏文件写日志
     log::warn!("[lyre-audio] 解码中止：{message}");
 }
 
-/// 采样序号转 `Timestamp` 需要的 `i64`。钳到上限写明意图。
+/// 采样序号转 `Timestamp` 要的 `i64`：溢出时钳到上限，不 panic。
 fn timestamp_of(sample: u64) -> i64 {
     i64::try_from(sample).unwrap_or(i64::MAX)
 }
@@ -527,7 +547,6 @@ mod tests {
             "R = {}",
             samples[1]
         );
-        // 第二帧必须与第一帧一致，说明没有累积错位
         assert!((samples[2] - samples[0]).abs() < 1e-6);
         assert!((samples[3] - samples[1]).abs() < 1e-6);
     }

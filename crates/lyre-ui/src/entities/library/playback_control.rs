@@ -1,5 +1,6 @@
 //! 随机与循环是两条轴，四态 `PlayMode` 装不下它们的组合，所以这里存 [`RepeatState`] 与 `shuffle`。
-//! 由 [`LibraryEntity::effective_mode`] 折算成 `PlayMode`、[`LibraryEntity::set_mode`] 拆回来，两个方向必须成对改。
+//! 由 [`LibraryEntity::effective_mode`] 折算成 `PlayMode`、[`LibraryEntity::set_mode`] 拆回来，
+//! 两个方向必须成对改。
 
 use lyre_core::{Advance, PlayMode, Track, TrackId};
 
@@ -10,14 +11,14 @@ use super::{LibraryEntity, LibraryEvent};
 /// 队列推进的结论，由 `RootView` 翻译成对 `PlaybackEntity` 的实际操作。
 #[derive(Clone, Debug, PartialEq)]
 pub enum Step {
+    /// 该开始播这一首了。队列推进已经跳过引擎播不了的曲目，所以这里一定是能播的。
     Play(Track),
-    /// 回到当前曲目开头
+    /// 回到当前曲目开头。
     Restart,
-    /// 队列到头，停下
+    /// 队列到头（或只剩播不了的曲目），停下。
     Stop,
 }
 
-/// 循环档位。与随机轴各管一头，组合由 `LibraryEntity::effective_mode` 折算成 [`PlayMode`]。
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub enum RepeatState {
     /// 不循环：走到队尾停下
@@ -30,7 +31,7 @@ pub enum RepeatState {
 }
 
 impl RepeatState {
-    /// 循环按钮的下一档：关 → 列表 → 单曲 → 关
+    /// 循环按钮的下一档：关 → 列表 → 单曲 → 关。
     pub fn next_in_cycle(self) -> Self {
         match self {
             Self::Off => Self::All,
@@ -49,7 +50,7 @@ impl RepeatState {
 }
 
 impl LibraryEntity {
-    /// 列表用来标注「播放中」的那一首
+    /// 列表用来标注「播放中」的那一首。
     pub fn now_playing(&self) -> Option<TrackId> {
         self.now_playing
     }
@@ -81,6 +82,9 @@ impl LibraryEntity {
         id: TrackId,
         cx: &mut Context<Self>,
     ) -> Option<Track> {
+        if self.refuse_unplayable(id, cx) {
+            return None;
+        }
         let queue = self
             .albums()
             .iter()
@@ -97,6 +101,9 @@ impl LibraryEntity {
         id: TrackId,
         cx: &mut Context<Self>,
     ) -> Option<Track> {
+        if self.refuse_unplayable(id, cx) {
+            return None;
+        }
         let queue = self
             .artists()
             .iter()
@@ -107,14 +114,19 @@ impl LibraryEntity {
     }
 
     /// 从当前可见列表开始播放：先把队列定为可见行（按显示顺序），再跳到这一首。
-    /// 可见列表恰好就是整库时不起队列，保持「队列随曲库走」的语义。
+    /// 可见列表恰好就是整库时不起队列，队列继续跟着曲库走。
     pub fn activate_in_view(&mut self, id: TrackId, cx: &mut Context<Self>) -> Option<Track> {
+        // 必须先拦：`set_queue` 会把队列重设成可见行，播不了的曲目会换掉队列却没放出声。
+        if self.refuse_unplayable(id, cx) {
+            return None;
+        }
+
         let whole_library = !self.scope.is_scoped() && !self.has_query();
         let queue = if whole_library {
             None
         } else {
             let rows = self.visible_ids(0..self.visible_len());
-            // 空列表不该把队列清空（调用方多半是在列表里点的，正常走不到）
+            // 空列表不能当成「清空队列」，`None` 才表示跟着曲库走。
             if rows.is_empty() { None } else { Some(rows) }
         };
         self.playlist.set_queue(queue, self.seed);
@@ -123,6 +135,11 @@ impl LibraryEntity {
 
     /// 选中某首并广播「该播它了」，返回被选中的曲目。只跳转，不改队列内容。
     pub fn activate(&mut self, id: TrackId, cx: &mut Context<Self>) -> Option<Track> {
+        // 所有播放入口（列表、队列面板、专辑卡、键盘 `Enter`）最终都汇到这里，是最后一道闸。
+        if self.refuse_unplayable(id, cx) {
+            return None;
+        }
+
         if !self.playlist.jump_to(id) {
             return None;
         }
@@ -134,6 +151,16 @@ impl LibraryEntity {
         cx.emit(LibraryEvent::Play(track.clone()));
         cx.notify();
         Some(track)
+    }
+
+    /// 引擎播不了时弹一条说明，队列、光标、`now_playing`、播放器都不动。返回 `true` 表示已拦下。
+    fn refuse_unplayable(&self, id: TrackId, cx: &mut Context<Self>) -> bool {
+        // 查不到的 id 交给各自的原有逻辑处理（通常是静默失败），这里只管「引擎播不了」。
+        let Some(reason) = self.playlist.by_id(id).and_then(Track::unplayable_reason) else {
+            return false;
+        };
+        cx.emit(LibraryEvent::Failed(reason));
+        true
     }
 
     pub fn step_next(&mut self) -> Step {
@@ -169,7 +196,8 @@ impl LibraryEntity {
         self.repeat
     }
 
-    /// 两条轴折算成四态：随机 + 列表循环取随机序（循环靠 [`Playlist::set_wrap_at_end`] 另传），随机 + 单曲循环取单曲循环。
+    /// 两条轴折算成四态：随机 + 列表循环取随机序（循环靠 [`Playlist::set_wrap_at_end`] 另传），
+    /// 随机 + 单曲循环取单曲循环。
     fn effective_mode(&self) -> PlayMode {
         match (self.shuffle, self.repeat) {
             (_, RepeatState::One) => PlayMode::RepeatOne,
@@ -179,7 +207,7 @@ impl LibraryEntity {
         }
     }
 
-    /// 写入折算后的模式；`reshuffle` 为真时推进洗牌种子（= 刚进入随机，换一副牌）。
+    /// 写入折算后的模式；`reshuffle` 为真时推进洗牌种子，换一副新的随机序。
     fn apply_mode(&mut self, reshuffle: bool, cx: &mut Context<Self>) {
         if reshuffle {
             self.seed = self
@@ -193,7 +221,7 @@ impl LibraryEntity {
         cx.notify();
     }
 
-    /// 随机按钮：设定随机轴的开 / 关
+    /// 随机按钮：设定随机轴的开 / 关。
     pub fn set_shuffle(&mut self, on: bool, cx: &mut Context<Self>) {
         if self.shuffle == on {
             return;
@@ -202,32 +230,32 @@ impl LibraryEntity {
         self.apply_mode(on, cx);
     }
 
-    /// `R` 键：非随机直接进随机、已是随机则回到顺序，不经过列表 / 单曲循环
+    /// `R` 键：非随机直接进随机、已是随机则回到顺序，不经过列表 / 单曲循环。
     pub fn toggle_shuffle(&mut self, cx: &mut Context<Self>) {
         let on = !self.shuffle;
         self.set_shuffle(on, cx);
     }
 
-    /// 循环按钮：关 → 列表 → 单曲 → 关，不影响随机轴
+    /// 循环按钮：关 → 列表 → 单曲 → 关，不影响随机轴。
     pub fn cycle_repeat(&mut self, cx: &mut Context<Self>) {
         self.repeat = self.repeat.next_in_cycle();
         self.apply_mode(false, cx);
     }
 
-    /// `S` 键的四态整体循环，同时把结果写回两条轴
+    /// `S` 键的四态整体循环，同时把结果写回两条轴。
     pub fn cycle_mode(&mut self, cx: &mut Context<Self>) {
         let next = self.playlist.mode().next_in_cycle();
         self.set_axes_from_mode(next);
         self.apply_mode(true, cx);
     }
 
-    /// 直接设四态模式，拆成两条轴
+    /// 直接设四态模式，拆成两条轴。
     pub fn set_mode(&mut self, mode: PlayMode, cx: &mut Context<Self>) {
         self.set_axes_from_mode(mode);
         self.apply_mode(true, cx);
     }
 
-    /// 由四态模式反推两条轴，不是 [`Self::effective_mode`] 的逆：单曲循环落在 `(false, One)`，那一档排不出随机序。
+    /// 由四态模式反推两条轴，不是 [`Self::effective_mode`] 的逆：单曲循环那档排不出随机序。
     fn set_axes_from_mode(&mut self, mode: PlayMode) {
         (self.shuffle, self.repeat) = match mode {
             PlayMode::Sequential => (false, RepeatState::Off),

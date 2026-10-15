@@ -1,8 +1,6 @@
 //! 独占格式协商与流初始化。
-//!
-//! 协商顺序是这里最要紧的一点：**先要声源自己的采样率与声道数**。要到了就是位完美直出
-//! （样本不重采样、不换声道，原样进硬件）；要不到才按设备混音格式、再按常用档位往下降。
-//! 参考实现是反过来从设备默认口径开始试的 —— 那样 44.1k 的素材落在 48k 设备上必然被重采样。
+//! 候选口径先要声源自己的采样率与声道数 —— 要到了就是位完美直出，要不到才按设备混音格式、再按常用档位往下降。
+//! 若从设备默认口径开始试，44.1k 素材落在 48k 设备上必然被重采样。
 
 use std::time::Duration;
 
@@ -30,8 +28,7 @@ const FALLBACK_RATES: [u32; 11] = [
 /// 初始化失败时的重试次数。设备刚被别的程序放开、驱动还在收尾，重试几次常常就成了。
 const INIT_RETRIES: usize = 3;
 
-/// 单次协商的总时限。候选格式有几十种，每种都重试三次会把用户晾在那儿好几秒 ——
-/// 超时就直接认输，报出来的原因也比「等太久」有用。
+/// 单次协商的总时限。候选格式有几十种、每种重试三次，不设上限会让用户干等好几秒。
 const NEGOTIATION_TIMEOUT: Duration = Duration::from_secs(3);
 
 /// 独占模式下设备要求的周期，按 128 字节对齐 —— Intel HDA 一类设备不对齐会直接拒绝初始化。
@@ -53,7 +50,7 @@ impl ExclusiveFormat {
         self.sample_rate == sample_rate && self.channels == channels
     }
 
-    /// 描述用，UI 上显示「192000 Hz / 2 ch / 32-bit float」这类文字。
+    /// 采样格式的文字形式，供日志与界面展示。
     pub const fn describe(self) -> &'static str {
         match self.samples {
             PcmFormat::F32 => "32-bit float",
@@ -302,7 +299,6 @@ fn interpret(accepted: &WaveFormat) -> Option<ExclusiveFormat> {
 
 /// 初始化客户端，失败就重建客户端重试。
 fn initialize(device: &Device, accepted: &WaveFormat, min_period: i64) -> Result<AudioClient> {
-    // 官方示例针对 Intel HDA 一类设备要求周期按字节对齐，不对齐会直接拒绝初始化
     let period = device
         .get_iaudioclient()
         .ok()

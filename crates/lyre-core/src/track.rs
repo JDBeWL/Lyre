@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
-/// 曲目的稳定标识：对路径求 FNV-1a。不用 `DefaultHasher` —— 它跨 Rust 版本不保证一致，落盘读回来会换 id。
+/// 曲目的稳定标识：对路径求 FNV-1a。不用 `DefaultHasher` —— 跨 Rust 版本不保证一致，落盘会换 id。
 #[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Debug, Serialize, Deserialize)]
 pub struct TrackId(pub u64);
 
@@ -48,16 +48,15 @@ pub enum Quality {
     HiRes,
 }
 
-/// 无损编码集合。判据是容器/编码而不是采样规格 ——
-/// 一个 16bit/44.1kHz 的 FLAC 依然是无损，而 24bit 的 mp3 依然是有损。
+/// 无损编码集合。判据是容器 / 编码而不是采样规格：
+/// 16bit/44.1kHz 的 FLAC 仍是无损，24bit 的 mp3 仍是有损。
 const LOSSLESS_FORMATS: [&str; 5] = ["flac", "wav", "ape", "alac", "aiff"];
 
-/// 高于 CD 的具体门槛：≥ 24bit 且 ≥ 96kHz。
-/// 两个条件都要，是因为只提高采样率而仍是 16bit 的话，量化噪声没变，听感上限也没变。
+/// 高于 CD 的门槛：≥ 24bit 且 ≥ 96kHz，两个条件都要 —— 只抬采样率而仍是 16bit，量化噪声没变。
 const HIRES_BITS: u8 = 24;
 const HIRES_RATE: u32 = 96_000;
 
-/// 一首曲目的元信息。不带封面字节，只记 `has_cover`；字节由 [`crate::metadata::read_cover`] 按需读取。
+/// 一首曲目的元信息。封面字节不在里面，只记 `has_cover`，按需走 [`crate::metadata::read_cover`]。
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Track {
     pub id: TrackId,
@@ -110,7 +109,7 @@ impl Track {
         }
     }
 
-    /// 小写扩展名，用于格式小标签；无扩展名返回 `None`（宁可不显示，不放看不懂的占位符）。
+    /// 小写扩展名，用于格式小标签；无扩展名返回 `None`。
     pub fn format(&self) -> Option<String> {
         let ext = self.path.extension()?.to_str()?;
         if ext.is_empty() {
@@ -125,8 +124,26 @@ impl Track {
             .is_some_and(|f| LOSSLESS_FORMATS.contains(&f.as_str()))
     }
 
-    /// 底栏徽章该写哪一档。读不到位深/采样率时最多只报 [`Quality::Lossless`] ——
-    /// Hi-Res 是要负责的字，必须有真数据撑着。
+    /// 当前引擎能不能把这一首放出声音。判据是扩展名对应的编码有没有解码实现，
+    /// 见 [`crate::scanner::UNSUPPORTED_EXTENSIONS`]。与 [`Self::is_lossless`] 是两件事：
+    /// WMA 有损且引擎解不了，APE 无损且能播。
+    pub fn is_playable(&self) -> bool {
+        self.format()
+            .is_none_or(|ext| crate::scanner::is_decodable_extension(&ext))
+    }
+
+    /// 播不了的原因，一句话直接给用户看；能播时是 `None`。列表提示与底部通知共用这一句。
+    pub fn unplayable_reason(&self) -> Option<String> {
+        if self.is_playable() {
+            return None;
+        }
+        Some(match self.format() {
+            Some(ext) => format!("《{}》是 {} 格式，当前引擎不支持播放", self.title, ext),
+            None => format!("《{}》的格式当前引擎不支持播放", self.title),
+        })
+    }
+
+    /// 底栏徽章该写哪一档。读不到位深 / 采样率时最多只报 [`Quality::Lossless`]，不许猜 Hi-Res。
     pub fn quality(&self) -> Quality {
         if !self.is_lossless() {
             return Quality::Lossy;
@@ -271,6 +288,50 @@ mod tests {
     }
 
     #[test]
+    fn 可播性看编码有没有解码实现而不是无损与否() {
+        // 有损且引擎解不了：标签、时长都读得到，就是放不出声
+        assert!(!Track::fallback(Path::new("/m/x.wma")).is_playable());
+        assert!(!Track::fallback(Path::new("/m/x.wma")).is_lossless());
+        // 无损且能播
+        assert!(Track::fallback(Path::new("/m/x.ape")).is_playable());
+        assert!(Track::fallback(Path::new("/m/x.ape")).is_lossless());
+
+        for f in ["ape", "wv", "opus"] {
+            assert!(
+                Track::fallback(Path::new(&format!("/m/x.{f}"))).is_playable(),
+                "{f} 已经有专门的解码器"
+            );
+        }
+        for f in ["flac", "mp3", "m4a", "aac", "wav", "ogg", "mka", "alac"] {
+            assert!(
+                Track::fallback(Path::new(&format!("/m/x.{f}"))).is_playable(),
+                "{f} 应当能播"
+            );
+        }
+    }
+
+    #[test]
+    fn 可播性大小写不敏感() {
+        assert!(!Track::fallback(Path::new("/m/x.WMA")).is_playable());
+        assert!(Track::fallback(Path::new("/m/x.FLAC")).is_playable());
+    }
+
+    #[test]
+    fn 播不了的原因点名曲目与格式() {
+        assert_eq!(
+            Track::fallback(Path::new("/m/x.flac")).unplayable_reason(),
+            None,
+            "能播的曲目没有原因可讲"
+        );
+
+        let reason = Track::fallback(Path::new("/m/夜航西飞.wma"))
+            .unplayable_reason()
+            .expect("wma 应当给出原因");
+        assert!(reason.contains("夜航西飞"), "要点名是哪一首：{reason}");
+        assert!(reason.contains("wma"), "要点明是哪个格式：{reason}");
+    }
+
+    #[test]
     fn 采样规格够高的无损才算高解析() {
         let cd = with_audio("a.flac", Some(44100), Some(16), Some(900));
         assert_eq!(
@@ -280,7 +341,7 @@ mod tests {
         );
         let hires = with_audio("a.flac", Some(96000), Some(24), Some(2834));
         assert_eq!(hires.quality(), Quality::HiRes);
-        // 两个条件缺一不可：只抬采样率而仍是 16bit，量化噪声没变
+        // 两个条件缺一不可：只抬采样率、位深仍是 16bit
         assert_eq!(
             with_audio("a.flac", Some(192_000), Some(16), None).quality(),
             Quality::Lossless

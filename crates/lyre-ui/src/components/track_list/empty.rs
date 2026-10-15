@@ -25,7 +25,6 @@ fn empty_title(text: impl Into<SharedString>) -> impl IntoElement {
         .child(text.into())
 }
 
-/// 空状态的说明文字：限宽 460，否则会被拉成一整行长句。
 fn empty_hint(text: impl Into<SharedString>) -> impl IntoElement {
     div()
         .max_w(px(460.))
@@ -52,7 +51,7 @@ pub(super) fn empty_library(library: Entity<LibraryEntity>) -> impl IntoElement 
         )))
 }
 
-/// 收窄了作用域、但里面一首曲目都没有时的提示。出路是返回上一级，与 [`no_matches`] 的「清空搜索」不是一回事。
+/// 收窄了作用域、但里面一首曲目都没有时的提示，出路是返回上一级。
 pub(super) fn empty_scope(
     library: Entity<LibraryEntity>,
     scope: Option<String>,

@@ -16,10 +16,8 @@ use crate::theme;
 /// 头图封面的边长：再大会在小窗口里把曲目列表整个挤出视野。
 const COVER: f32 = 180.0;
 
-/// 播放按钮直径，比行内悬浮播放键（40）大一档。
 const PLAY_BTN: f32 = 52.0;
 
-/// 头图里的三种作用域。
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum HeroKind {
     Album,
@@ -28,13 +26,12 @@ pub enum HeroKind {
     Collection,
 }
 
-/// 头图要显示的全部内容。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct HeroInfo {
     pub kind: HeroKind,
     /// 大标题：专辑名 / 艺术家名。
     pub title: String,
-    /// 标题上方的分类标签：「专辑」/「艺术家」。
+    /// 分类标签：「专辑」/「艺术家」/「歌单」。
     pub tag: &'static str,
     /// 副标题：专辑给艺术家名，艺术家给「N 张专辑」。
     pub subtitle: String,
@@ -87,7 +84,7 @@ impl HeroInfo {
     }
 
     /// 「关注」的对象名。艺术家页取标题；专辑页取唯一艺术家名。
-    /// 群星 / 无艺术家（`subtitle` 为空或 [`lyre_core::VARIOUS_ARTISTS`]）返回 `None` —— 关注一个集合没有意义。
+    /// 群星 / 无艺术家（`subtitle` 为空或 [`lyre_core::VARIOUS_ARTISTS`]）返回 `None`。
     pub fn follow_target(&self) -> Option<&str> {
         match self.kind {
             HeroKind::Artist => Some(self.title.as_str()),
@@ -97,7 +94,7 @@ impl HeroInfo {
                 if artist.is_empty() || artist == lyre_core::VARIOUS_ARTISTS {
                     return None;
                 }
-                // 多人字段拆开后每一位才是艺术家页的名字；整串不是任何一个人的名字，关注了也匹配不上。
+                // 多人字段拆开后每一位才是艺术家页的名字，整串不是任何一个人的名字，匹配不上。
                 match lyre_core::artist_keys_str(Some(artist)).as_slice() {
                     [one] => Some(one),
                     _ => None,
@@ -232,7 +229,7 @@ pub fn hero(
                         .flex()
                         .flex_col()
                         .gap(px(theme::GAP_SM))
-                        // 父级 `items_end` 只能让整个文字块贴底，所以这里用 `justify_end` 把内容推到自己的底部。
+                        // 父级 `items_end` 只让文字块整体贴底，这里要 `justify_end` 把自己推到底。
                         .justify_end()
                         .pb(px(6.0))
                         .child(
@@ -240,8 +237,8 @@ pub fn hero(
                                 .text_size(px(theme::FONT_HERO))
                                 .font_weight(theme::WEIGHT_TITLE)
                                 .text_color(theme::text())
-                                // 必须截断：gpui 默认换行，而 `hero` 是 `flex_none`、下面的曲目列表
-                                // 是 `flex_1` —— 一个长专辑名多折一行，列表就少一行，极端情况能吃掉整屏。
+                                // 必须截断：gpui 默认换行，`hero` 是 `flex_none`、列表是 `flex_1`，
+                                // 长专辑名多折一行就吃掉列表一行，极端情况能吃掉整屏。
                                 .truncate()
                                 .child(info.title.clone()),
                         )
@@ -265,7 +262,6 @@ pub fn hero(
         .into_any_element()
 }
 
-/// 头图下方的一排操作：播放 + 关注 + 随机播放 + 更多。
 fn action_row(
     info: &HeroInfo,
     library: Entity<LibraryEntity>,
@@ -332,8 +328,8 @@ fn shuffle_button(info: &HeroInfo, library: Entity<LibraryEntity>) -> AnyElement
             library.update(cx, |library, cx| {
                 // 用 set_shuffle 而不是 toggle：已经是随机时，再点一次不该把它关掉。
                 library.set_shuffle(true, cx);
-                library.focus_first(cx);
-                library.play_focused(cx);
+                // 挑第一首能播的，而不是死盯第一行：专辑里第一首可能正是引擎解不了的格式。
+                library.play_first_playable(cx);
             });
         })
         .into_any_element()
@@ -376,7 +372,6 @@ fn more_button(
             }),
         )
         .when_some(collection, |menu, id| {
-            // 只有歌单页有可改的封面；专辑 / 艺术家页没有。
             let library = library.clone();
             menu.separator()
                 .item(PopupMenuItem::new("更换封面").on_click(move |_, _, cx| {
@@ -417,8 +412,8 @@ fn play_button(info: &HeroInfo, library: Entity<LibraryEntity>) -> AnyElement {
         .on_click(move |_, _, cx| {
             library.update(cx, |library, cx| {
                 // 作用域与搜索自动生效：专辑详情里可见区第一行就是这张专辑的第一首。
-                library.focus_first(cx);
-                library.play_focused(cx);
+                // 第一首若是引擎解不了的格式，会顺延到下一首能播的。
+                library.play_first_playable(cx);
             });
         })
         .into_any_element()
@@ -521,12 +516,13 @@ fn placeholder(kind: HeroKind, initial: Option<char>) -> AnyElement {
 
 #[cfg(test)]
 mod tests {
-    // 不要写 `use super::*`：会把 `crate::platform::*` 里的 gpui `test` 宏带进来，遮蔽内置 `#[test]`。
+    // 不要写 `use super::*`：会把 `crate::platform::*` 里的 gpui `test` 宏带进来，
+    // 遮蔽内置 `#[test]`。
     use super::HeroInfo;
     use lyre_core::{Track, TrackId};
     use std::time::Duration;
 
-    /// 造一首曲目；组内聚合字段私有，只能走真实的 `group_by_album` / `group_by_artist` 构造。
+    /// 造一首曲目；`AlbumGroup` / `ArtistGroup` 的聚合字段私有，只能由真实分组函数得出。
     fn track(id: u64, title: &str, album: &str, artist: &str, secs: Option<u64>) -> Track {
         Track {
             id: TrackId(id),
@@ -540,7 +536,7 @@ mod tests {
         }
     }
 
-    /// 专辑页的「关注」只有一位艺术家时才有意义：多人字段拆开后那一位才是艺术家页的名字。
+    /// 专辑页的「关注」要恰好一位艺术家：多人字段拆开后的那一位才是艺术家页的名字。
     #[test]
     fn album_follow_target_only_exists_for_a_single_artist() {
         let single = lyre_core::group_by_album(&[track(1, "a", "独集", "林一", None)]);
@@ -589,7 +585,6 @@ mod tests {
 
     #[test]
     fn album_hero_omits_duration_when_any_track_is_unknown() {
-        // 时长没全知道时不显示总时长，不给一个精确的假数字。
         let tracks = vec![
             track(1, "a", "A", "X", Some(60)),
             track(2, "b", "A", "X", None),
@@ -629,7 +624,7 @@ mod tests {
 
     #[test]
     fn title_is_never_blank() {
-        // 空白标题会渲染成一块空；lyre_core 的分组保证标题非空（无标签归「未知专辑」）。
+        // 分组保证标题非空：无标签的曲目归「未知专辑」。
         let tracks = vec![track(1, "a", "", "", None)];
         let groups = lyre_core::group_by_album(&tracks);
         let info = HeroInfo::from_album(&groups[0]);
@@ -653,7 +648,6 @@ mod tests {
 
     #[test]
     fn album_with_several_artists_has_no_follow_target() {
-        // 「群星」是个集合，关注它没有意义。
         let tracks = vec![
             track(1, "a", "合辑", "A", None),
             track(2, "b", "合辑", "B", None),

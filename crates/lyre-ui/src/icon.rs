@@ -59,14 +59,12 @@ pub enum Glyph {
     Plus,
     Sort,
     Music,
-    /// 拖拽手柄（两列圆点）。手写成实心点：Lucide 的 `grip-vertical` 是描边圆，缩到 14px 会糊成一片。
+    /// 拖拽手柄（两列圆点）。写成实心点：Lucide 的 `grip-vertical` 是描边圆，缩到 14px 会糊成一片。
     Grip,
 
-    // 顶栏右上用户区
     Bell,
     User,
 
-    // 底栏右侧的功能入口
     Lyrics,
     Devices,
     Fullscreen,

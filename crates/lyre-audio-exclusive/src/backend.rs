@@ -1,7 +1,5 @@
 //! 独占输出后端：`lyre_audio::AudioBackend` 的第二个实现。
-//!
-//! 与共享后端共用同一套解码链（`lyre_audio::decode` 里的那几个适配器），差别只在末端：
-//! 共享后端把链交给 rodio 的 mixer，这里则把链的输出灌进采样环，由渲染线程独占写进设备。
+//! 与共享后端共用解码链，末端不同：采样经环缓冲由渲染线程独占写入设备，绕开 rodio 的 mixer。
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -11,8 +9,8 @@ use std::time::Duration;
 
 use crossbeam_channel::{Receiver, RecvTimeoutError, Sender, bounded};
 use lyre_audio::decode::{
-    ChannelConvertSource, GainControl, GainRamp, LfeConfig, LockFreeSource, SoftClip,
-    SymphoniaDecoder,
+    ChannelConvertSource, GainControl, GainRamp, LfeConfig, LockFreeSource, SoftClip, TrackDecoder,
+    WhenEmpty,
 };
 use lyre_audio::{AudioBackend, AudioError};
 use rodio::{ChannelCount, SampleRate, Source};
@@ -104,6 +102,18 @@ impl ExclusiveBackend {
         &self.device_name
     }
 
+    /// 累计欠载采样数：环里没货、只能拿静音顶上设备的那部分。
+    /// 涨了就说明推送线程（解码、建链、换手）跟不上渲染线程，听感是断音或卡顿。
+    pub fn underrun_samples(&self) -> u64 {
+        self.shared.starved.load(Ordering::Relaxed)
+    }
+
+    /// 独占流起播过几次。同一台设备上连续放两首时这个数**不该**涨：
+    /// 涨了就说明中间的流被停掉又起了，接缝处会有一声卡顿。
+    pub fn stream_starts(&self) -> u64 {
+        self.shared.stream_starts.load(Ordering::Relaxed)
+    }
+
     /// 让渲染线程协商一次。`preferred` 是声源口径，设备能接受就是位完美直出。
     fn configure(&mut self, device: Option<String>, preferred: Option<(u32, u16)>) -> Result<()> {
         self.commands
@@ -138,8 +148,7 @@ impl ExclusiveBackend {
         }
     }
 
-    /// 保证当前流的口径能接下这一首。现成口径就能位完美直出时不动设备 ——
-    /// 重开流要几百毫秒，而曲库里 44.1k 与 48k 各占一半，能省则省。
+    /// 保证当前流的口径能接下这一首。现成口径就能位完美直出时不动设备 —— 重开流要几百毫秒。
     fn ensure_format(&mut self, preferred: (u32, u16)) -> Result<()> {
         if self
             .format
@@ -152,9 +161,7 @@ impl ExclusiveBackend {
     }
 
     /// 当前独占流是否已经落在目标设备上。
-    ///
-    /// 跟随默认时不能只看标识：默认设备会被插拔换掉，那时标识没变但流还停在旧设备上，
-    /// 必须重建才跟得上。所以这里拿此刻的默认设备来比。
+    /// 跟随默认时不能只看标识：标识没变但流可能还停在旧设备上，要拿此刻默认设备比。
     fn stream_is_on(&self, wanted: Option<&str>) -> bool {
         let Some(opened) = self.opened_endpoint.as_deref() else {
             return false;
@@ -166,30 +173,31 @@ impl ExclusiveBackend {
         }
     }
 
-    /// 建一条链并把它的输出灌进环。
-    fn rebuild(&mut self, path: &Path, start: Duration, autoplay: bool) -> Result<Duration> {
-        // 旧线程先收工，再作废环里剩下的样本：反过来的话旧线程会在作废之后又灌进一批。
-        self.stop_push();
-        self.ring.invalidate();
-        self.shared.producer_done.store(false, Ordering::SeqCst);
-        // `written` 必须在这里同步归零，不能只靠渲染线程处理 `Flush`：下面马上就把
-        // `base` 改成 `start`，旧计数还在的话 `position()` 会立刻多算出一整段
-        // ——表现为切换瞬间进度条先虚高一截再回落。
-        self.shared.written.store(0, Ordering::SeqCst);
-        let _ = self.commands.send(RenderCommand::Flush);
-
+    /// 把新链路接上并灌进环。
+    ///
+    /// 顺序固定：**先**用好整条链（换采样率、按 `start` 跳转、预解码），**再**一次性换手
+    /// （停旧推送线程、作废环、起新推送线程）。反过来的话，解码器打开与 seek 的耗时会直接
+    /// 变成断音：环已作废，渲染线程在写静音，新数据还要等几十毫秒才出得来。
+    fn rebuild(
+        &mut self,
+        mut decoder: TrackDecoder,
+        path: &Path,
+        start: Duration,
+        autoplay: bool,
+    ) -> Result<Duration> {
         let format = self
             .format
             .ok_or_else(|| ExclusiveError::Initialize("独占格式尚未协商".to_owned()))?;
 
-        let mut decoder = SymphoniaDecoder::new(path)?;
         let duration = decoder.total_duration().unwrap_or(Duration::ZERO);
         if !start.is_zero() {
             decoder.seek(start)?;
         }
         let source_rate = decoder.sample_rate();
 
-        let source = LockFreeSource::new(decoder)?;
+        // 推送线程不在实时线程上：解码没跟上时**等**真样本，别让它把补出来的静音
+        // 当内容灌进环 —— 那会在每首开头留下一段断断续续的沉默
+        let source = LockFreeSource::new(decoder, WhenEmpty::Wait)?;
         // 采样率一致就整段跳过重采样 —— 这正是位完美那条路径
         let resampled: Box<dyn Source<Item = f32> + Send> = if source_rate == format.sample_rate {
             Box::new(source)
@@ -215,12 +223,25 @@ impl ExclusiveBackend {
         );
         let clipped = SoftClip::new(ramped);
 
+        // 换手：旧推送线程先收工，再作废环里剩下的样本 —— 反过来的话旧线程会在作废之后
+        // 又灌进一批。它手里的写入端带着旧世代，作废之后一律写不进东西。
+        self.stop_push();
+        self.ring.invalidate();
+        // 换一代推送线程。完工标志带着世代号，这里不必（也不能）去清零：清零是异步生效的，
+        // 新线程可能已经把整首写完并置上了标志，渲染线程这才处理到那条清零命令。
+        let generation = self.shared.begin_producer();
+        // `written` 必须在此同步归零，不能只等渲染线程处理 `Flush`。
+        // 下面马上把 `base` 改成 `start`，旧计数会让 `position()` 多算一段：进度条先虚高再回落。
+        self.shared.written.store(0, Ordering::SeqCst);
+        let _ = self.commands.send(RenderCommand::Flush);
+
         self.push = Some(push::spawn(
             clipped,
             SampleRing::writer(&self.ring),
             format.sample_rate,
             format.channels,
-            Arc::clone(&self.shared.producer_done),
+            self.shared.done_flag(),
+            generation,
         )?);
 
         self.current = Some(Loaded {
@@ -251,7 +272,6 @@ impl ExclusiveBackend {
     }
 }
 
-/// 采样率/声道数转成 rodio 的 `NonZero` 包装。
 fn sample_rate(value: u32) -> SampleRate {
     std::num::NonZeroU32::new(value).unwrap_or(SampleRate::MIN)
 }
@@ -260,17 +280,14 @@ fn channel_count(value: u16) -> ChannelCount {
     std::num::NonZeroU16::new(value).unwrap_or(ChannelCount::MIN)
 }
 
-/// 只读文件头拿采样率与声道数，用来挑独占格式。
-fn probe(path: &Path) -> Result<(u32, u16)> {
-    let decoder = SymphoniaDecoder::new(path)?;
-    Ok((decoder.sample_rate(), decoder.channels()))
-}
-
 impl AudioBackend for ExclusiveBackend {
     fn load(&mut self, path: &Path, autoplay: bool) -> std::result::Result<Duration, AudioError> {
-        let preferred = probe(path).map_err(AudioError::from)?;
+        // 解码器只打开一次：口径要从它身上看，链路又得用它来建。
+        // 分开打开的话，WavPack 这类要通读一遍文件的格式会白读两遍。
+        let decoder = TrackDecoder::open(path)?;
+        let preferred = (decoder.sample_rate(), decoder.channels());
         self.ensure_format(preferred).map_err(AudioError::from)?;
-        self.rebuild(path, Duration::ZERO, autoplay)
+        self.rebuild(decoder, path, Duration::ZERO, autoplay)
             .map_err(AudioError::from)
     }
 
@@ -282,7 +299,9 @@ impl AudioBackend for ExclusiveBackend {
                 return Ok(());
             };
             let (path, start) = (current.path.clone(), current.base);
-            self.rebuild(&path, start, true).map_err(AudioError::from)?;
+            let decoder = TrackDecoder::open(&path)?;
+            self.rebuild(decoder, &path, start, true)
+                .map_err(AudioError::from)?;
             return Ok(());
         }
 
@@ -323,8 +342,10 @@ impl AudioBackend for ExclusiveBackend {
             position
         };
 
-        // 独占下的 seek 只能重建链路：环里缓存着几秒采样，原地跳既复杂又不精确
-        self.rebuild(&path, target, was_playing)
+        // 独占下的 seek 只能重建链路：环里缓存着几秒采样，原地跳既复杂又不精确。
+        // 跳转与建链要在旧链路还在播的时候做完，换手的空档才短得听不出。
+        let decoder = TrackDecoder::open(&path)?;
+        self.rebuild(decoder, &path, target, was_playing)
             .map_err(AudioError::from)
             .map(|_| ())
     }
@@ -363,8 +384,7 @@ impl AudioBackend for ExclusiveBackend {
 
     fn set_device(&mut self, device: Option<&str>) -> std::result::Result<(), AudioError> {
         let wanted = device.map(str::to_owned);
-        // 光比标识是不够的：跟随默认时默认设备被换掉之后标识没变，但流必须重建。
-        // 只比标识会把这种情况当成「没变」直接返回，于是界面已经显示新默认设备、声音却还在旧的上面。
+        // 光比标识不够：跟随默认时默认设备被换掉，标识没变，但流必须重建。
         if wanted == self.device_id && self.stream_is_on(wanted.as_deref()) {
             return Ok(());
         }
@@ -378,10 +398,11 @@ impl AudioBackend for ExclusiveBackend {
         // 从「此刻播到的位置」续上，不能用 `current.base`：base 只在 load / seek 时更新，
         // 拿它重建会把上次手动跳转之后播过的那一段全丢掉，进度直接退回去。
         let start = self.position();
-        let preferred = probe(&path).map_err(AudioError::from)?;
+        let decoder = TrackDecoder::open(&path)?;
+        let preferred = (decoder.sample_rate(), decoder.channels());
         self.configure(self.device_id.clone(), Some(preferred))
             .map_err(AudioError::from)?;
-        self.rebuild(&path, start, playing)
+        self.rebuild(decoder, &path, start, playing)
             .map_err(AudioError::from)
             .map(|_| ())
     }

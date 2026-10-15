@@ -10,6 +10,11 @@ description = "Audio engine for Lyre. Exclusive playback thread, symphonia decod
 lyre-core = { workspace = true }
 rodio = { version = "0.22", default-features = false, features = ["playback"] }
 symphonia = { version = "0.6", features = ["all"] }
+# symphonia 0.6 解不了的三类格式，改用这些纯 Rust 解码器补上。
+# 三者都无 unsafe，许可分别是 MIT OR Apache-2.0 / BSD-3-Clause / MIT。
+ape-decoder = "0.3"
+opus-pure = "0.2"
+oxideav-wavpack = "0.0"
 crossbeam-channel = "0.5"
 thiserror = { workspace = true }
 log = "0.4"

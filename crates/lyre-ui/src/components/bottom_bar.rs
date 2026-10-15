@@ -1,5 +1,6 @@
 //! 底部控制栏：三列网格 —— 左曲目身份 / 中运输 + 进度 / 右模式 · 音量 · 队列。
-//! 左右两栏都是显式宽度（左 16→240 随窗口连续变化，右固定 320），窄于 `STACKED_BOTTOM_MIN`（640px）时改两行、进度条独占一行。
+//! 左右两栏是显式宽度：左 16→240 随窗口连续变化，右固定 320。
+//! 窄于 `STACKED_BOTTOM_MIN`（640px）时改两行，进度条独占一行。
 
 use crate::components::mini_now_playing::MiniNowPlaying;
 use crate::components::seek_bar::SeekBar;
@@ -36,7 +37,7 @@ impl BottomBar {
         volume: Entity<VolumeControl>,
         cx: &mut Context<Self>,
     ) -> Self {
-        // 模式按钮的图标要跟着模式变，所以得 observe 曲库（低频，可接受）
+        // 模式按钮的图标跟着模式变，所以要 observe 曲库（低频，可接受）
         let library_sub = cx.observe(&library, |_, _, cx| cx.notify());
         let shell_sub = cx.observe(&shell, |_, _, cx| cx.notify());
         // 设备列表只在插拔或切换时变；subscribe 而不是 observe，免得被 10Hz 的进度通知带着重绘
@@ -147,8 +148,7 @@ impl Render for BottomBar {
         // 曲库为空时三个控件仍常驻、只降级为禁用态：整栏消失会让布局跳动。
         let enabled = count > 0;
 
-        // 随机 / 循环按钮由 `mode_group` 现场构造而不是预造一份：`AnyElement` 不是 `Clone`，
-        // 而「三列」与「两行」两种布局都要各用一次。
+        // 随机 / 循环按钮由 `mode_group` 现场构造：`AnyElement` 不是 `Clone`，两种布局各用一次。
 
         let panel = self.shell.read(cx).right_panel();
         let now_playing_open = panel == Some(PanelTab::NowPlaying);
@@ -306,7 +306,7 @@ impl Render for BottomBar {
             .gap(px(theme::GAP_LG))
             .px(px(theme::GAP_LG));
 
-        // 左栏（`ShellEntity::bottom_left_width`）始终存在；宽度与内容是两件事，`show_mini` 只管要不要往里放东西。
+        // 左栏始终存在；宽度与内容是两件事，`show_mini` 只管要不要往里放东西。
         row = row.child(
             div()
                 .flex_none()

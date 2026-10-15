@@ -32,13 +32,13 @@ pub struct ShellEntity {
     lyrics: bool,
     /// 主区导航区段，由侧栏驱动。
     nav: NavSection,
-    /// 导航历史栈，栈非空就画返回按钮。存整个 [`Scope`]，有效性判断在 `LibraryEntity::restore_scope`。
+    /// 导航历史栈，非空就画返回按钮。存整个 [`Scope`]，有效性判断在 `restore_scope`。
     nav_history: Vec<(NavSection, Scope)>,
-    /// 「后退」弹出的落点，供「前进」取用；任何新导航都会清空它（见 [`ShellEntity::push_history`]）。
+    /// 「后退」弹出的落点，供「前进」取用；任何新导航都会清空它。
     nav_forward: Vec<(NavSection, Scope)>,
-    /// 专辑网格每行几列，按可用宽度反推：卡宽由 `flex_1` 平分而封面高度是常量，钉死列数会把卡片拉成横幅。
+    /// 专辑网格每行几列，按可用宽度反推：卡宽由 `flex_1` 平分、封面高度恒定，钉死列数会拉扁卡片。
     grid_columns: usize,
-    /// 单卡宽度，与 `grid_columns` 同源算出（见 `grid_card_width`）。
+    /// 单卡宽度，与 `grid_columns` 同源算出（两者都出自 `grid_metrics`）。
     grid_card_width: f32,
     /// 窗口尺寸变化订阅。`observe_window_bounds` 不会立刻回调一次，
     /// 所以初值仍必须由 `new()` 自己播种。
@@ -111,7 +111,7 @@ impl ShellEntity {
         } else {
             Some(tab)
         };
-        // 右面板那 320px 的开合决定网格能放几列，同上。
+        // 右面板那 320px 的开合改变网格可用宽度，列数必须同步重算。
         self.recompute_grid_columns();
         cx.notify();
     }
@@ -137,7 +137,7 @@ impl ShellEntity {
             self.sidebar_override = Some(sidebar);
         }
 
-        // 面板与侧栏的开合都改变网格可用宽度，同上
+        // 面板与侧栏的开合都改变网格可用宽度，列数必须同步重算。
         self.recompute_grid_columns();
         cx.notify();
     }

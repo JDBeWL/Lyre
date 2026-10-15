@@ -11,7 +11,6 @@ use crate::platform::*;
 use crate::theme;
 
 /// 无封面占位 / 分类块的稳定取色：按首字符在调色板上取值。
-/// 网格、首页、搜索探索块必须同色，所以调色板只此一份。
 pub fn monogram_color(initial: char) -> Rgba {
     const PALETTE: [(u8, u8, u8); 6] = [
         (0x6d, 0x5b, 0x9c),
@@ -106,7 +105,6 @@ pub fn list_cover(
     seed: &str,
     cx: &mut App,
 ) -> AnyElement {
-    // 用户指定过的封面优先于成员的内嵌封面
     if let Some(path) = cover_file {
         let owned = path.to_path_buf();
         covers.update(cx, |cache, cx| cache.request_file(owned, size, cx));
@@ -133,7 +131,7 @@ pub fn list_cover(
     }
 }
 
-/// 列表 / 侧栏的行首缩略图。尺寸、圆角、缺封面时的占位图标是参数，三态分派、描边与骨架共用这一份。
+/// 列表 / 侧栏的行首缩略图，尺寸、圆角与缺封面时的占位图标由参数给。
 pub fn thumb(
     covers: &Entity<CoverCache>,
     library: &Entity<LibraryEntity>,
@@ -163,7 +161,6 @@ pub fn thumb(
                     .object_fit(ObjectFit::Cover),
             )
             .into_any_element(),
-        // 确认没有封面：描边 + 图标占位
         Cover::Missing => cell
             .border_1()
             .border_color(theme::border())
@@ -190,7 +187,7 @@ pub fn image_cell(image: Arc<RenderImage>, size: f32, radius: f32) -> AnyElement
         .into_any_element()
 }
 
-/// 按名字派生的渐变块。歌单没有内嵌封面，这一格只能用派生色。
+/// 按名字派生的渐变块。
 fn derived_cover(size: f32, radius: f32, seed: &str) -> AnyElement {
     div()
         .flex_none()

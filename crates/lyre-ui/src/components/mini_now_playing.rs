@@ -260,7 +260,6 @@ impl Render for MiniNowPlaying {
     }
 }
 
-/// 底栏左区的收藏爱心：无曲目时不画，有曲目时永远可见（不藏进 hover）。
 fn heart_button(
     id: Option<lyre_core::TrackId>,
     liked: bool,
@@ -327,8 +326,7 @@ fn badge_tip(audio: AudioInfo, format: Option<&str>) -> String {
     }
 }
 
-/// 音质徽章：悬停给提示，点开给逐项规格。
-/// 什么规格都没读到时仍然亮徽章（「无损」是编码事实，不依赖规格），但不挂浮层。
+/// 什么规格都没读到时仍亮徽章 —— 「无损」是编码事实，不依赖规格，但不挂浮层。
 fn quality_badge(quality: Quality, audio: AudioInfo, format: Option<String>) -> AnyElement {
     let codec = format.unwrap_or_default().to_uppercase();
     let tip = badge_tip(audio, Some(codec.as_str()));

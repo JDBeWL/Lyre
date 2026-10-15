@@ -1,8 +1,6 @@
 //! 音频链路集成测试：`AudioHandle::spawn_with` 注入假后端，不需要声卡。
 //! 完整验证「命令 → 线程 → 事件 / 快照」，包括只在真机偶发的时序问题（切歌瞬间误报结束）。
-//!
-//! 测试里 unwrap/expect 是正当的断言手段。`clippy.toml` 的 `allow-*-in-tests`
-//! 只覆盖 `#[cfg(test)]` 模块，不覆盖 `tests/` 下的独立集成测试 crate，故在此显式允许。
+//! `clippy.toml` 的 `allow-*-in-tests` 覆盖不到 `tests/` 下的集成测试 crate，故在顶部显式允许 unwrap/expect。
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use std::path::{Path, PathBuf};
@@ -27,7 +25,7 @@ struct FakeState {
     reported: Mutex<String>,
 }
 
-/// 不碰声卡的后端。行为完全由测试摆布。
+/// 不碰声卡的后端，行为完全由测试摆布。
 struct FakeBackend {
     state: Arc<FakeState>,
 }
@@ -98,14 +96,12 @@ impl AudioBackend for FakeBackend {
             .flatten()
     }
 
-    /// 真实的 `RodioBackend` 在共享模式返回空串，这里由用例摆布 —— 用来验证
-    /// 控制线程有没有把后端的口径变化如实播报出去。
+    /// 真实的 `RodioBackend` 在共享模式返回空串，这里由用例摆布，验证控制线程有没有把口径变化如实播报。
     fn describe_output(&self) -> String {
         self.state.reported.lock().unwrap().clone()
     }
 }
 
-/// 启一个连着假后端的音频线程，返回句柄、事件接收端和可摆布的后端状态。
 fn harness() -> (AudioHandle, Receiver<PlayerEvent>, Arc<FakeState>) {
     let (tx, rx) = channel();
     let state = Arc::new(FakeState::default());
@@ -127,7 +123,6 @@ where
     while Instant::now() < deadline {
         match rx.recv_timeout(Duration::from_millis(50)) {
             Ok(event) if predicate(&event) => return Some(event),
-            // 超时与「拿到但不匹配」都继续等；`continue` 在这里是多余的
             Ok(_) | Err(RecvTimeoutError::Timeout) => {}
             Err(RecvTimeoutError::Disconnected) => return None,
         }
@@ -279,7 +274,6 @@ fn natural_end_is_reported_exactly_once() {
     let first = wait_for(&rx, |e| matches!(e, PlayerEvent::Ended));
     assert!(first.is_some(), "自然播完应当上报 Ended");
 
-    // 再等几拍，确认不会重复上报
     let mut extra = 0;
     let deadline = Instant::now() + Duration::from_millis(400);
     while Instant::now() < deadline {
@@ -502,7 +496,6 @@ fn dropping_the_handle_shuts_the_thread_down() {
                 disconnected = true;
                 break;
             }
-            // 超时与「拿到事件」都继续等：`continue` 是多余的（匹配已是循环体最后一句）
             Err(RecvTimeoutError::Timeout) | Ok(_) => {}
         }
     }

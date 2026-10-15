@@ -47,7 +47,7 @@ pub fn hero_band(seed: Option<&str>) -> impl IntoElement {
                     linear_color_stop(tint, 1.0),
                 )),
         )
-        // 收尾的 `bg` 实色层：alpha 混合在深色底上淡出没干净，会留一层极淡的雾。
+        // 收尾的 `bg` 实色层：alpha 淡出在深色底上归不到零，会残留色差。
         .child(
             div()
                 .absolute()

@@ -1,4 +1,4 @@
-//! 主区导航：区段、歌词遮罩、前进 / 后退历史栈，不含宽度与网格几何。
+//! 主区导航：区段、歌词遮罩、前进 / 后退历史栈。
 
 use crate::entities::Scope;
 use crate::platform::*;

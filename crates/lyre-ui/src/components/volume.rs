@@ -1,4 +1,4 @@
-//! 音量控制。轨道几何同样由 `canvas` 捕获换算成比例，但拖动过程中就实时下发 —— 调音量不重建解码链，不必等松手。
+//! 音量控制。轨道几何由 `canvas` 捕获换算比例，拖动中实时下发 —— 调音量不重建解码链。
 
 use crate::components::settings_panel::SettingsEntity;
 use crate::entities::{PlaybackEntity, PlaybackEvent};
@@ -82,7 +82,7 @@ impl VolumeControl {
         self.drag.unwrap_or_else(|| self.playback.read(cx).volume())
     }
 
-    /// 结束一次拖动，条内松手和条外松手都走这里。音量在拖动中已实时下发，这里收尾并落盘；`drag` 为 `None` 时无操作。
+    /// 结束一次拖动，条内条外松手都走这里。拖动中已实时下发，这里收尾并落盘。
     fn end_drag(&mut self, cx: &mut Context<Self>) {
         if self.drag.take().is_some() {
             self.persist(cx);
@@ -120,7 +120,7 @@ impl VolumeControl {
     /// 静音 / 取消静音。`M` 键与点击喇叭都走这里。
     pub fn toggle_mute(&mut self, cx: &mut Context<Self>) {
         if let Some(previous) = self.muted_from.take() {
-            // 原音量本身就是 0（手动拖到底再静音）时给一个可听的默认值，否则取消静音看起来像没反应。
+            // 原音量本身就是 0（拖到底再静音）时给一个可听的默认值，否则取消静音没反应。
             let restore = if previous <= 0.01 { 0.5 } else { previous };
             self.push(restore, cx);
         } else {
@@ -239,8 +239,8 @@ impl Render for VolumeControl {
                 }
             }))
             .child(
-                // 轨道两端各让出一个滑块半径，行程与 `ratio_in_track` 完全一致：
-                // 指针在哪，滑块中心就到哪，两端也真的点得到。
+                // 轨道两端各让出一个滑块半径，行程与 `ratio_in_track` 的换算一致：
+                // 指针在哪，滑块中心就到哪。
                 div()
                     .absolute()
                     .left(px(THUMB_R))
@@ -331,17 +331,14 @@ mod tests {
     // 不写 `use super::*`：`crate::platform::*` 带进来的 gpui `test` 宏会遮蔽内置 `#[test]`。
     use super::{BAR_W, THUMB_R, ratio_in_track, snap};
 
-    /// 轨道最右缘那一格必须正好是满量程：两端不让出滑块半径时这里算出来是 0.988，怎么拖都停在 99%。
     #[test]
     fn the_two_ends_of_the_track_are_exactly_0_and_100_percent() {
         assert_eq!(ratio_in_track(BAR_W, 0.0, BAR_W), 1.0);
         assert_eq!(ratio_in_track(0.0, 0.0, BAR_W), 0.0);
-        // 越出手柄也收在两端，而不是绕回 0 或变成负数
         assert_eq!(ratio_in_track(BAR_W + 40.0, 0.0, BAR_W), 1.0);
         assert_eq!(ratio_in_track(-40.0, 0.0, BAR_W), 0.0);
     }
 
-    /// 指针与滑块中心必须重合，否则「点哪到哪」会变成「点哪偏五像素」。
     #[test]
     fn the_pointer_and_the_thumb_center_coincide() {
         for percent in [0.0f32, 0.25, 0.5, 0.75, 1.0] {

@@ -13,7 +13,7 @@ use lyre_core::Track;
 
 use crate::platform::*;
 
-/// 事件泵节拍。音频线程每 50ms 塞一条进度，这里每拍排空积压、只 `notify()` 一次，把重绘钉在 10Hz。
+/// 事件泵节拍。每拍排空积压、只 `notify()` 一次，100ms 把重绘钉在 10Hz。
 const PUMP_INTERVAL: Duration = Duration::from_millis(100);
 
 /// 对外广播的语义事件（进度不在此列，它走 [`PlaybackEntity::position`]）。
@@ -33,10 +33,8 @@ pub enum PlaybackEvent {
     Finished,
 }
 
-/// 独占后端的构造入口。
-///
-/// `lyre-audio` 不能依赖 `lyre-audio-exclusive`（后者要复用前者的解码链，反向依赖会成环），
-/// 所以工厂只能由装配层注入进去。
+/// 独占后端的构造入口，由装配层注入：
+/// `lyre-audio` 不能依赖 `lyre-audio-exclusive`（后者复用前者的解码链，反向依赖会成环）。
 fn exclusive_factory() -> lyre_audio::ExclusiveOpenFn {
     Box::new(|device| {
         ExclusiveBackend::open(device)
@@ -280,7 +278,8 @@ impl PlaybackEntity {
         self.send(PlayerCommand::Play);
     }
 
-    /// 跳到指定位置。只在「用户松开进度条」时调用：rodio 的 seek 会重建解码器，拖动中连续调用会卡顿爆音。
+    /// 跳到指定位置。只在「用户松开进度条」时调用：
+    /// rodio 的 seek 会重建解码器，拖动中连续调用会卡顿爆音。
     pub fn seek(&mut self, position: Duration) {
         self.send(PlayerCommand::Seek(position));
     }
@@ -293,8 +292,7 @@ impl PlaybackEntity {
         cx.notify();
     }
 
-    /// 换设备是否交叉淡化。设置项在 UI 线程、后端在音频线程，只能这样下发；
-    /// 值没变就不重复发，免得每次改设置都往音频线程塞一条。
+    /// 换设备是否交叉淡化。设置项在 UI 线程、后端在音频线程，只能这样下发。
     pub fn set_smooth_switch(&mut self, enabled: bool) {
         if self.smooth_switch == enabled {
             return;

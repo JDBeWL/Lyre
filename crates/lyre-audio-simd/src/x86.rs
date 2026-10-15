@@ -1,11 +1,6 @@
-//! `x86` / `x86_64` 的 PCM 内核。整个 crate 只有这里出现 `unsafe`。
-//!
-//! 两处与标量基准的差别，都是刻意的：
-//! - 四舍五入：`cvtps` 就近取偶，标量 `.round()` 就近取远，最多差一个最低位；
-//! - NaN：标量的 `as` 转换给出 0，而 `min`/`max` 遇到 NaN 会返回另一侧操作数（变成一个
-//!   满刻度值），所以这里必须显式把 NaN 通道置零，否则一次解码异常就是一记满幅爆音。
-//!
-//! 满刻度的饱和值两条路径完全一致。
+//! `x86` / `x86_64` 的 PCM 内核，整个 crate 只有这里出现 `unsafe`。
+//! 与标量基准的舍入差别是刻意的：`cvtps` 就近取偶，标量 `.round()` 就近取远，最多差一个最低位。
+//! NaN 必须显式置零 —— 标量的 `as` 给出 0，而 SIMD `min`/`max` 折向另一侧操作数变成满刻度值；饱和值两条路径一致。
 
 #[cfg(target_arch = "x86")]
 use std::arch::x86::*;
@@ -67,7 +62,7 @@ pub(super) unsafe fn i32(samples: &[f32], out: &mut Vec<u8>) {
         let mut index = 0;
         while index < samples.len() {
             let raw = _mm256_loadu_ps(samples.as_ptr().add(index));
-            // min/max 遇 NaN 会折成满刻度，先挑出来置零（见模块文档）
+            // min/max 遇 NaN 会折成满刻度，先置零
             let raw = _mm256_andnot_ps(_mm256_cmp_ps::<{ _CMP_UNORD_Q }>(raw, raw), raw);
             let clamped = _mm256_min_ps(_mm256_max_ps(raw, negative), positive);
             let scaled = _mm256_mul_ps(clamped, scale);
@@ -104,7 +99,7 @@ pub(super) unsafe fn i16(samples: &[f32], out: &mut Vec<u8>) {
         let mut index = 0;
         while index < samples.len() {
             let raw = _mm256_loadu_ps(samples.as_ptr().add(index));
-            // min/max 遇 NaN 会折成满刻度，先挑出来置零（见模块文档）
+            // min/max 遇 NaN 会折成满刻度，先置零
             let raw = _mm256_andnot_ps(_mm256_cmp_ps::<{ _CMP_UNORD_Q }>(raw, raw), raw);
             let clamped = _mm256_min_ps(_mm256_max_ps(raw, negative), positive);
             let converted = _mm256_cvtps_epi32(_mm256_mul_ps(clamped, scale));
@@ -145,7 +140,7 @@ pub(super) unsafe fn i32_sse2(samples: &[f32], out: &mut Vec<u8>) {
         let mut index = 0;
         while index < samples.len() {
             let raw = _mm_loadu_ps(samples.as_ptr().add(index));
-            // min/max 遇 NaN 会折成满刻度，先挑出来置零（见模块文档）
+            // min/max 遇 NaN 会折成满刻度，先置零
             let raw = _mm_andnot_ps(_mm_cmpunord_ps(raw, raw), raw);
             let clamped = _mm_min_ps(_mm_max_ps(raw, negative), positive);
             let scaled = _mm_mul_ps(clamped, scale);
@@ -185,7 +180,7 @@ pub(super) unsafe fn i16_sse2(samples: &[f32], out: &mut Vec<u8>) {
         let mut index = 0;
         while index < samples.len() {
             let raw = _mm_loadu_ps(samples.as_ptr().add(index));
-            // min/max 遇 NaN 会折成满刻度，先挑出来置零（见模块文档）
+            // min/max 遇 NaN 会折成满刻度，先置零
             let raw = _mm_andnot_ps(_mm_cmpunord_ps(raw, raw), raw);
             let clamped = _mm_min_ps(_mm_max_ps(raw, negative), positive);
             let converted = _mm_cvtps_epi32(_mm_mul_ps(clamped, scale));

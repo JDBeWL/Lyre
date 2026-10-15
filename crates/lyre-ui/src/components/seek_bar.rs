@@ -12,7 +12,7 @@ use crate::theme;
 const TRACK_H: f32 = 4.0;
 /// 悬停 / 拖动时的轨道高度。
 const TRACK_H_ACTIVE: f32 = 8.0;
-/// 命中区高度：高于轨道才好点中，又不能高到盖住底栏里上下的其它元素。
+/// 命中区高度：不能高到盖住底栏里上下的其它元素。
 const HIT_H: f32 = 22.0;
 
 pub struct SeekBar {
@@ -173,7 +173,7 @@ impl Render for SeekBar {
                                     .bg(theme::control()),
                             )
                             .child(
-                                // 滑块只在悬停 / 拖动时出现；50% + 负 margin 居中，轨道增厚时自动跟着走。
+                                // 滑块用 50% + 负 margin 居中，轨道增厚时自动跟着走。
                                 div()
                                     .absolute()
                                     .top(relative(0.5))

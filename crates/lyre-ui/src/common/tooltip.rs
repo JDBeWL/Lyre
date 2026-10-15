@@ -22,7 +22,6 @@ impl Render for TextTooltip {
     }
 }
 
-/// 构造交给 `Div::tooltip` 的提示构建闭包。每次悬浮新建一个实体。
 pub fn builder(
     label: impl Into<SharedString>,
 ) -> impl Fn(&mut Window, &mut App) -> AnyView + 'static {

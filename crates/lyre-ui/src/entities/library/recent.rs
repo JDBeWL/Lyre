@@ -46,7 +46,7 @@ impl LibraryEntity {
             .collect()
     }
 
-    /// 记一笔「这首开始播了」，跨重启保留。由 root 在 `PlaybackEvent::TrackChanged` 上转发，自动续播也走它，不会漏记。
+    /// 记一笔「这首开始播了」，跨重启保留。由 root 转发 `TrackChanged`，自动续播也走它。
     pub fn record_played(&mut self, id: TrackId, cx: &mut Context<Self>) {
         let before = self.recents.clone();
         self.recents.record(id);

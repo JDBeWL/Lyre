@@ -8,7 +8,6 @@ use crate::platform::*;
 use crate::shell::{NavSection, ShellEntity};
 use crate::theme;
 
-/// 导航项共用的依赖。
 pub(super) struct NavDeps {
     pub(super) shell: Entity<ShellEntity>,
     pub(super) library: Entity<LibraryEntity>,
@@ -58,7 +57,7 @@ pub(super) fn library_item_selected(nav: NavSection, scoped: bool) -> bool {
     nav.in_library() && !scoped
 }
 
-/// 导航项共用的外壳：图标 + 文字 + 悬停 / 选中样式，不绑行为（点击由调用方接）。
+/// 导航项共用的外壳，不绑行为：点击由调用方接。
 fn home_item_shell(
     id: &'static str,
     glyph: Glyph,

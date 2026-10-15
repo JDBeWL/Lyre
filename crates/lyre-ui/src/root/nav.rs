@@ -36,7 +36,7 @@ impl RootView {
             return;
         }
 
-        // 判据是历史栈而不是 is_scoped()：栈空 + 作用域收窄只可能是点侧栏「曲目」进来的，确实没有上一步
+        // 判据是历史栈不是 is_scoped()：栈空 + 收窄只可能是点侧栏「曲目」进来的，确实没有上一步
         if self.go_back(cx) {
             return;
         }
@@ -58,7 +58,7 @@ impl RootView {
             return;
         }
 
-        // 词清空后再按一次才离开搜索页。落点固定是曲目列表：回「上一页」可能撞上被搜索改过的网格状态
+        // 词清空后再按一次才离开搜索页。落点固定是曲目列表：回上一页会撞上被搜索改过的网格状态
         if self.shell.read(cx).nav_section() == NavSection::Search {
             self.shell.update(cx, |shell, cx| {
                 shell.clear_history();
@@ -117,7 +117,7 @@ pub enum NavDirection {
     Forward,
 }
 
-/// 后退 / 前进的实际搬运：取当前位置 → 从对应栈弹出落点 → 复原作用域并切区段。
+/// 后退 / 前进的实际搬运：弹出落点后先 `restore_scope` 再 `set_nav`，反过来会渲染一帧错配的组合。
 pub fn navigate(
     shell: &Entity<ShellEntity>,
     library: &Entity<LibraryEntity>,
@@ -142,8 +142,7 @@ pub fn navigate(
     shell.update(cx, |shell, cx| shell.set_nav(section, cx));
 }
 
-/// 设置页开关。进入时压的落点带着当前作用域，所以「从某张专辑进设置」出来还在那张专辑。
-/// 已在设置页时按 = 后退一步；进设置必然先压了落点，走不到空栈。
+/// 设置页开关。进设置必先压当前作用域落点，「已在设置页时按 = 后退一步」走不到空栈。
 pub fn toggle_settings(shell: &Entity<ShellEntity>, library: &Entity<LibraryEntity>, cx: &mut App) {
     if shell.read(cx).nav_section() == NavSection::Settings {
         navigate(shell, library, NavDirection::Back, cx);
@@ -172,16 +171,15 @@ pub fn nav_click(
 
 /// 浮动返回按钮的直径，[`HEADER_BACK_INSET`] 由它算出。
 pub const BACK_BTN: f32 = 40.0;
-/// 按钮离主区卡片顶端的距离。详情类页头的大标题默认落在色带下沿；只有标题的页头（设置）把标题行顶到这一档、给到 [`BACK_BTN`] 等高。
+/// 按钮离主区卡片顶端的距离，与页头标题行同高。
 pub const BACK_INSET_TOP: f32 = theme::GAP_MD;
 /// 页头为了让开返回按钮额外增加的左内边距。
 pub const HEADER_BACK_INSET: f32 = BACK_BTN + theme::GAP_LG;
-/// 浮动返回按钮的元素 id。
 const FLOATING_BACK_ID: &str = "floating-back";
 
 #[cfg(test)]
 mod tests {
-    // 不写 `use super::*`：glob 会把 `crate::platform::*` 里的 gpui `test` 过程宏带进来，遮蔽内置 `#[test]`
+    // 不写 `use super::*`：glob 会带进 platform 里的 gpui `test` 过程宏，遮蔽内置 `#[test]`
     use super::back_tooltip;
     use crate::shell::NavSection;
 

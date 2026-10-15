@@ -14,7 +14,7 @@ mod thread;
 
 pub use backend::AudioBackend;
 pub use command::PlayerCommand;
-pub use decode::{LockFreeSource, SymphoniaDecoder};
+pub use decode::{LockFreeSource, SymphoniaDecoder, TrackDecoder, WhenEmpty};
 pub use device::AudioDeviceInfo;
 pub use error::{AudioError, Result};
 pub use event::{OutputMode, PlaybackState, PlayerEvent};
@@ -27,10 +27,8 @@ use std::time::Duration;
 
 use crate::device_monitor::DeviceMonitor;
 
-/// 独占后端工厂，由上层注入。
-///
-/// `lyre-audio-exclusive` 依赖本 crate 才能复用解码链，所以本 crate 不能反向依赖它 ——
-/// 独占后端的构造只能从这里传进来。参数是目标设备的稳定标识，`None` 表示系统默认。
+/// 独占后端工厂，由上层注入 —— `lyre-audio-exclusive` 依赖本 crate 才能复用解码链，
+/// 本 crate 不能反向依赖它。参数是目标设备的稳定标识，`None` 表示系统默认。
 pub type ExclusiveOpenFn = Box<dyn FnMut(Option<&str>) -> Result<Box<dyn AudioBackend>> + Send>;
 
 /// UI 侧持握的句柄，`Send + Clone`；真正的音频资源在它背后那条线程里。
@@ -74,9 +72,7 @@ impl AudioHandle {
     }
 
     /// 启动音频线程，后端由调用方提供；懒创建 —— 第一条命令才开设备，没声卡也能启动。
-    ///
-    /// 返回 `Err` 只表示资源耗尽，设备打不开是懒创建阶段的事，
-    /// 会经 [`PlayerEvent::Error`] 上报，不是这里的错误。
+    /// 返回 `Err` 只表示资源耗尽；设备打不开是懒创建阶段的事，经 [`PlayerEvent::Error`] 上报。
     pub fn spawn_with<F>(events: Sender<PlayerEvent>, open: F) -> Result<Self>
     where
         F: FnOnce() -> Result<Box<dyn AudioBackend>> + Send + 'static,

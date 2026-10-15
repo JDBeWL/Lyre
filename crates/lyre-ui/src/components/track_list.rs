@@ -117,11 +117,13 @@ impl Render for TrackList {
             (
                 library.visible_len(),
                 library.len(),
-                // 用 `now_playing` 而不是队列光标 `current_id`：后者导入完成时就指向第一首，会把第 1 行误标成播放中
+                // 用 `now_playing` 而不是队列光标 `current_id`：后者导入完成时
+                // 就指向第一首，会把第 1 行误标成播放中
                 library.now_playing(),
                 // 光标的值一直在（`Enter` / `Delete` 要它），底色只在键盘真的动过之后才画
                 library.focus().filter(|_| library.shows_cursor()),
-                // 用 `has_query()` 而不是 `is_filtering()`：后者在「只进了一张专辑、没搜索」时也是 `true`
+                // 用 `has_query()` 而不是 `is_filtering()`：后者在「只进了一张
+                // 专辑、没搜索」时也是 `true`
                 library.has_query(),
                 library.sort_key(),
                 library.scanning(),
@@ -245,7 +247,7 @@ impl Render for TrackList {
     }
 }
 
-/// 一行（以及列头）共用的布局与作用域参数。
+/// 行与列头共用的布局与作用域参数。
 #[derive(Clone, Copy)]
 struct RowEnv {
     /// 行高，来自密度设置；`uniform_list` 用它算每一项的位置
@@ -256,6 +258,5 @@ struct RowEnv {
     kind: ScopeKind,
     /// 行首拖拽手柄 + 行内落点区
     reorderable: bool,
-    /// 行首勾选列，以及「点标题 = 选中而不是播放」
     selectable: bool,
 }

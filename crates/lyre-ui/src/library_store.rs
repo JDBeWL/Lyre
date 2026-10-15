@@ -5,7 +5,6 @@ use lyre_core::Track;
 
 use crate::persist;
 
-/// 落盘文件名。
 const FILE: &str = "library.json";
 
 /// 读缓存并剔除已不存在的文件（不剔除会留着点不动的幽灵行）。
@@ -19,7 +18,6 @@ pub fn save(tracks: &impl serde::Serialize) {
     persist::save_compact_lossy(FILE, tracks);
 }
 
-/// 剔除盘上已不存在的曲目。
 /// 一个都不在时要原样保留：那是盘没醒 / 可移动盘没挂载，照常剔除会把整库覆盖成空。
 fn prune_missing(tracks: Vec<Track>) -> Vec<Track> {
     if !tracks.is_empty() && tracks.iter().all(|track| !track.path.is_file()) {

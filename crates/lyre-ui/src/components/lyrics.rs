@@ -21,7 +21,7 @@ const PILL_PAD_Y: f32 = theme::GAP_XS;
 const ROW_GAP: f32 = theme::GAP_SM;
 /// 整列共用的基准字号档位，从大到小取第一个放得下典型长句的一档。
 const BASE_TIERS: [f32; 3] = [theme::FONT_HERO, 26.0, 22.0];
-/// 最小基准字号，必须与 `BASE_TIERS` 末项一致，由下面的编译期断言守着。
+/// 最小基准字号，必须与 `BASE_TIERS` 末项一致。
 const BASE_FLOOR: f32 = 22.0;
 const _: () = assert!(BASE_FLOOR == BASE_TIERS[BASE_TIERS.len() - 1]);
 /// 挑档位时按多长的句子算「放得下」。再长的让它折行，而不是把整列拖小。
@@ -201,7 +201,6 @@ fn text_budget(window: f32, sidebar: f32, panel_open: bool) -> f32 {
 }
 
 /// 整列的基准字号：只看正文预算，不看每句长短（签名里没有句子）。
-/// 阈值也不能只看字数：同一句在 1920px 窗口里 32px 绰绰有余，在 560px 最小窗口里连 24px 都放不下。
 fn active_size(budget: f32) -> f32 {
     *BASE_TIERS
         .iter()
@@ -214,7 +213,7 @@ fn idle_size(budget: f32) -> f32 {
     (active_size(budget) * IDLE_RATIO).round().max(IDLE_FLOOR)
 }
 
-/// 一行文字在给定字号下要占几个视觉行。估算偏大更安全。
+/// 一行文字在给定字号下要占几个视觉行。
 fn visual_rows(text: &str, size: f32, budget: f32, bold: bool) -> usize {
     (text_width(text, size, bold) / budget.max(1.0))
         .ceil()
@@ -303,7 +302,7 @@ impl Render for LyricsView {
         };
 
         div()
-            // 遮罩必须自己绑鼠标监听：gpui 只在元素注册了鼠标监听时才进命中测试，光有 `id` 不挡点击。
+            // 遮罩必须绑鼠标监听：gpui 只对注册了鼠标监听的元素做命中测试，光有 `id` 不挡点击。
             .id("lyrics-overlay")
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .on_click(|_, _, cx| cx.stop_propagation())
@@ -492,7 +491,7 @@ fn lyrics_column(
             .text_color(theme::text())
             .children(original_spans(line, index, is_active, word, opacity));
 
-        // 药丸按内容收缩；槽位高度只用于滚动偏移，不给整个槽位涂色。
+        // 药丸按内容收缩；槽位高度只用于滚动偏移。
         let group = SharedString::from(format!("lyric-row-{index}"));
         let mut pill = div()
             .flex_none()
@@ -723,7 +722,6 @@ mod tests {
         );
     }
 
-    /// 全角一个字占一整个字号宽，半角约一半 —— 估算只用来选档，偏大更安全。
     #[test]
     fn 宽度估算按全角半角分档() {
         assert!(text_width("ああああ", 20.0, false) > text_width("aaaa", 20.0, false));
@@ -775,7 +773,6 @@ mod tests {
 
     #[test]
     fn 逐字亮度的爬升落在可读区间() {
-        // 短到 10ms 的格子会被抬到下限，长音格子压到上限
         assert!(RAMP_MIN >= Duration::from_millis(40), "太短就还是硬切");
         assert!(
             RAMP_MAX <= Duration::from_millis(1_200),
@@ -895,8 +892,6 @@ mod tests {
         }
     }
 
-    /// gpui 把墨迹在 `line_height` 里上下均分，所以盒高按字号等比时，
-    /// 原文与译文两行墨迹的联合中心才落在药丸内容区的中心。
     #[test]
     fn 双语行的墨迹中心落在药丸中心() {
         // 墨迹在各自的盒子里居中，联合中心按墨迹高度加权

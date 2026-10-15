@@ -45,7 +45,6 @@ pub mod keys {
     pub const PLAY_MODE: &str = "s";
     pub const SHUFFLE: &str = "r";
     pub const LYRICS: &str = "l";
-    /// Tab 走控件序列。gpui 不自带这条绑定，见 `actions::FocusNextControl`。
     pub const TAB_NEXT: &str = "tab";
     pub const TAB_PREV: &str = "shift-tab";
 }

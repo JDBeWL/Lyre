@@ -14,7 +14,7 @@ pub struct RecentCard {
 }
 
 /// 按专辑名去重（保留最近那次），顺序由近及远。
-/// 前提是 `tracks` 已按由近及远排好（`LibraryEntity::recent_tracks` 就是这个顺序），乱序输入会把顺序和代表曲目都弄错。
+/// 前提：`tracks` 已由近及远排好（`recent_tracks` 即此顺序），乱序会弄错顺序与代表曲目。
 pub fn recent_cards(tracks: &[Track], limit: usize) -> Vec<RecentCard> {
     let mut out: Vec<RecentCard> = Vec::new();
 
@@ -58,7 +58,6 @@ fn bump(meta: &str) -> String {
     format!("{} 首", n + 1)
 }
 
-/// 一张专辑分组折成一张卡片。
 fn album_card(group: &AlbumGroup) -> RecentCard {
     RecentCard {
         id: group.representative,
@@ -68,7 +67,7 @@ fn album_card(group: &AlbumGroup) -> RecentCard {
     }
 }
 
-/// 「为你推荐」：按固定步长采样，结果可复现。改成随机每次重绘都会换一批。
+/// 「为你推荐」：按固定步长采样，结果可复现。
 pub fn recommend_cards(groups: &[AlbumGroup], limit: usize) -> Vec<RecentCard> {
     let groups = recommendable(groups);
     if groups.is_empty() || limit == 0 {
@@ -144,7 +143,6 @@ mod tests {
 
     #[test]
     fn repeats_do_not_scramble_the_order() {
-        // A B A：A 要提到最前，B 不能被丢掉。
         let tracks = vec![
             track(1, "a", Some("A"), None),
             track(2, "b", Some("B"), None),
@@ -224,7 +222,6 @@ mod tests {
                 "{name} 里出现了「未知专辑」"
             );
         }
-        // 有名字的专辑照常上首页，别把整块推荐掏空
         assert_eq!(popular_cards(&groups, 12)[0].album, "一张专辑");
     }
 
@@ -239,7 +236,6 @@ mod tests {
         let second = recommend_cards(&groups, 3);
         assert_eq!(first.len(), 3, "limit 生效");
         assert_eq!(first, second, "推荐必须是稳定采样，两次结果一致");
-        // 曲目数为 0 时不该 panic，也不该越过上限。
         assert_eq!(recommend_cards(&[], 3).len(), 0);
         assert_eq!(recommend_cards(&groups, 0).len(), 0);
     }

@@ -15,11 +15,11 @@ use super::nav::{NavDeps, home_item, lib_fallback_item, library_item, library_it
 
 const CARD_PAD: f32 = theme::GAP_SM;
 const LIB_HEADER_H: f32 = 32.0;
-/// 下卡片虚拟列表最多渲染的行数，防御性截断。
+/// 下卡片虚拟列表最多渲染的行数。
 const LIB_MAX_ROWS: usize = 1000;
 
 impl Sidebar {
-    /// 上卡片：首页 / 曲库两项，定高不参与滚动。没有「搜索」项 —— 搜索只由顶栏那个框进入。
+    /// 上卡片：首页 / 曲库两项，定高不参与滚动。
     pub(super) fn home_card(&self, state: SidebarState, cx: &mut App) -> AnyElement {
         let labels = state.shows_labels();
         let nav = self.shell.read(cx).nav_section();
@@ -91,7 +91,7 @@ impl Sidebar {
                 .into_any_element();
         }
 
-        // 行数上限是防御性的：`item_count` 过大时 `uniform_list` 内部总高溢出成负数，列表一进来就滚到底。
+        // 防御性截断：`item_count` 过大时 `uniform_list` 的总高溢出成负数，列表一进来就滚到底。
         let rows: Rc<Vec<SideEntry>> = Rc::new(entries);
         let row_count = rows.len().min(LIB_MAX_ROWS);
 
@@ -304,7 +304,6 @@ fn header_action(
         .into_any_element()
 }
 
-/// 「你的音乐库」标题下的筛选胶囊，配色走 [`chip_colors`]。
 fn chip(
     id: &'static str,
     label: &'static str,

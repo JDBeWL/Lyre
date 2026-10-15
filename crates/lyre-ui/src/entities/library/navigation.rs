@@ -1,5 +1,6 @@
 //! 键盘光标：`↑↓` 只移动光标，`Enter` 才播。默认跟着播放走（[`LibraryEntity::follow_playback`]）。
-//! 键盘路径的光标变动都走 [`LibraryEntity::set_focus`]，它是 [`super::LibraryEvent::FocusMoved`] 的唯一发出者。
+//! 键盘路径的光标变动都走 [`LibraryEntity::set_focus`]，
+//! 它是 [`super::LibraryEvent::FocusMoved`] 的唯一发出者。
 
 use lyre_core::{Track, TrackId};
 
@@ -20,7 +21,7 @@ impl LibraryEntity {
     /// 移动光标（键盘路径）。发 `FocusMoved` 让列表滚过去 —— 事件带的是可见行号而非曲库
     /// 下标，过滤状态下两者不同。换曲引起的光标移动走 `Self::follow_playback`：那条不发事件。
     pub fn set_focus(&mut self, id: TrackId, cx: &mut Context<Self>) {
-        // 要放在早返回之前：在首行再按一次 `↑` 落点没变，但用户确实在用键盘，底色该亮出来。
+        // 要放在早返回之前：首行再按 `↑` 落点没变，但用户在用键盘，底色该亮。
         self.cursor_visible = true;
         if self.focus == Some(id) {
             return;
@@ -117,8 +118,28 @@ impl LibraryEntity {
     }
 
     /// 播放光标所在曲目。返回是否有事发生（供调用方决定要不要处理 `Step`）。
+    /// 光标停在一首引擎播不了的曲目上时返回 `None`（并弹一条说明）。
     pub fn play_focused(&mut self, cx: &mut Context<Self>) -> Option<Track> {
         let id = self.focus?;
         self.activate(id, cx)
+    }
+
+    /// 从可见行里挑第一首引擎能播的并开始播放；一首都没有时只提示。
+    /// 空格在什么都没装载时走这条，而不是走光标那一首：光标可能停在一首播不了的曲目上。
+    pub fn play_first_playable(&mut self, cx: &mut Context<Self>) -> Option<Track> {
+        let found = (0..self.visible_len()).find_map(|row| {
+            self.track_at_row(row)
+                .filter(|track| track.is_playable())
+                .map(|track| track.id)
+        });
+
+        if let Some(id) = found {
+            return self.activate(id, cx);
+        }
+
+        cx.emit(LibraryEvent::Failed(
+            "曲库里没有引擎能播放的曲目".to_owned(),
+        ));
+        None
     }
 }

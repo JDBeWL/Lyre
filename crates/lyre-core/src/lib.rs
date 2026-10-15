@@ -23,7 +23,8 @@ pub use lyrics::{
 pub use metadata::{Cover, read_cover, read_track};
 pub use playlist::{Advance, PlayMode, Playlist, SortKey};
 pub use scanner::{
-    AUDIO_EXTENSIONS, collect_audio_paths, collect_audio_paths_with, is_audio_file,
-    scan_into_tracks,
+    AUDIO_EXTENSIONS, SIGNATURE_PROBE_LEN, Signature, UNSUPPORTED_EXTENSIONS, collect_audio_paths,
+    collect_audio_paths_with, is_audio_extension, is_audio_file, is_decodable_extension,
+    scan_into_tracks, signature_of,
 };
 pub use track::{AudioInfo, Quality, Track, TrackId, format_duration};

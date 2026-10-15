@@ -164,7 +164,7 @@ impl Render for RootView {
                 this.library.update(cx, LibraryEntity::focus_last);
             }))
             .on_action(cx.listener(|this, _: &PlayFocused, window, cx| {
-                // 与 `TogglePlay` 同理：焦点在控件上时 Enter 归那个控件
+                // 焦点在控件上时，Enter 归那个控件
                 if control_has_focus(window, cx) {
                     return;
                 }

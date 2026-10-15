@@ -1,5 +1,5 @@
-//! 自建歌单的右键菜单与重命名 / 删除对话框。歌单是侧栏里唯一可改名的条目。
-//! 输入框必须在开窗前建（构建器会被反复调用）；删除不走「撤销」提示条。
+//! 自建歌单的右键菜单与重命名 / 删除对话框。
+//! 输入框必须在开窗前建：它的构建器会被反复调用。
 
 use lyre_core::CollectionId;
 
@@ -8,7 +8,7 @@ use crate::entities::LibraryEntity;
 use crate::platform::*;
 use crate::theme;
 
-/// 自建歌单的右键菜单，侧栏与搜索结果页共用。
+/// 自建歌单的右键菜单。
 pub(crate) fn collection_menu(
     library: Entity<LibraryEntity>,
     id: CollectionId,
@@ -30,8 +30,7 @@ pub(crate) fn collection_menu(
     }
 }
 
-/// 对话框底部那一排：次要动作在左、主行动在右。
-/// 组件库的 `Dialog` 不自己画按钮（`footer` 默认 `None`），所以用项目自己的 `text_button`。
+/// 组件库的 `Dialog` 不自己画按钮（`footer` 默认 `None`），所以底部用项目自己的 `text_button`。
 fn dialog_footer(
     cancel_id: &'static str,
     ok_id: &'static str,
@@ -114,7 +113,7 @@ fn open_delete_dialog(
     window: &mut Window,
     cx: &mut App,
 ) {
-    // 数字在开窗前算好：构建器会被反复调用，每次都去查一遍曲库没必要
+    // 数字在开窗前算好：构建器会被反复调用
     let count = library.read(cx).collection_len(id);
     window.open_dialog(cx, move |dialog, _window, _cx| {
         let library = library.clone();

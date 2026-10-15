@@ -16,7 +16,7 @@ pub enum Breakpoint {
     Narrow,
 }
 
-/// 网格卡片的宽度区间，列数由它反推：低于下限放不下可辨识的封面 + 标题，高于上限卡片成横幅。
+/// 网格卡片的宽度区间，列数由它反推。
 pub const CARD_MIN_W: f32 = 132.0;
 pub const CARD_MAX_W: f32 = 200.0;
 /// 列数硬上限，避免超宽屏（4K+）出现十几列。

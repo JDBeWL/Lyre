@@ -1,4 +1,4 @@
-//! 上次播放的位置，独立于 `Settings` 落盘到 `resume.json`，只在 `Settings::resume_position` 打开时读写。
+//! 上次播放的位置落盘到独立的 `resume.json`，只在 `Settings::resume_position` 打开时读写。
 
 use std::path::PathBuf;
 
@@ -6,7 +6,6 @@ use serde::{Deserialize, Serialize};
 
 use crate::persist;
 
-/// 落盘文件名。
 const FILE: &str = "resume.json";
 
 /// 存路径而不是 `TrackId`：`TrackId` 由路径算出，重新导入会变，路径才是跨启动稳定的键。

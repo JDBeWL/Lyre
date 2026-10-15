@@ -186,7 +186,6 @@ impl Render for AlbumGrid {
         let section = self.shell.read(cx).nav_section();
         let rows = self.rows(cx);
         let row_count = rows.len();
-        // 页头要报的是条目总数，不是 `uniform_list` 的行数。
         let item_count = total_items(&rows);
         let columns = self.columns(cx);
 
@@ -255,7 +254,6 @@ fn total_items(rows: &[Vec<Card>]) -> usize {
     rows.iter().map(Vec::len).sum()
 }
 
-/// 网格页的页头（专辑 / 艺术家）。
 fn grid_header(section: NavSection, count: usize, columns: usize) -> impl IntoElement {
     let noun = match section {
         NavSection::Albums => "张专辑",
@@ -500,7 +498,6 @@ fn cover_cell(
                     .object_fit(ObjectFit::Cover),
             )
         }
-        // 确认没有封面：画首字色块
         crate::common::cover::Cover::Missing => cell
             .rounded(px(theme::RADIUS_LG))
             .border_1()
@@ -669,7 +666,6 @@ mod tests {
 
     #[test]
     fn the_max_width_actually_engages_on_ultrawide_screens() {
-        // 上面两个宽高比测试自己就截断了宽度，等于假设了 `max_w` 存在；这里反向确认宽屏上预测卡宽确实超过它
         let wide = [2560.0, 3440.0, 3840.0, 5120.0];
         let mut engaged = 0;
         for width in wide {

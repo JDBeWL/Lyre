@@ -12,7 +12,7 @@ fn cmp_ci(a: &str, b: &str) -> Ordering {
         .cmp(b.chars().flat_map(char::to_lowercase))
 }
 
-/// 缺失字段排在前面，让人一眼看到缺了什么。
+/// 缺失字段排在前面。
 fn compare_by(key: SortKey, a: &Track, b: &Track) -> Ordering {
     match key {
         SortKey::ImportOrder => Ordering::Equal,
@@ -347,8 +347,8 @@ impl Playlist {
         true
     }
 
-    /// 撤销移除。同时插入 `tracks` 与 `order`（顺序模式的不变量是两者同序），已存在同 id 返回 `false`。
-    /// 随机模式下只能大致还原到列表原处。
+    /// 撤销移除。同时插入 `tracks` 与 `order`（顺序模式的不变量是两者同序），
+    /// 已存在同 id 返回 `false`。随机模式下只能大致还原到列表原处。
     pub fn insert_at(&mut self, track: Track, index: usize) -> bool {
         if self.index.contains_key(&track.id) {
             return false;
@@ -465,37 +465,66 @@ impl Playlist {
         }
     }
 
-    /// 用户点了「下一曲」。
+    /// 用户点了「下一曲」。播不出来的曲目照常留在曲库与列表里（界面置灰），队列不在其上停留 ——
+    /// 否则「下一曲」只会换来一次「格式不支持」的报错。整队都播不了时按走到头处理。
     #[allow(clippy::should_implement_trait)] // 不是迭代器：它会按循环档位绕回开头，也会在末尾停下
     pub fn next(&mut self) -> Advance {
         if self.order.is_empty() {
             return Advance::Stop;
         }
-        if self.pos + 1 < self.order.len() {
-            self.pos += 1;
-            Advance::To(self.pos)
-        } else if self.mode == PlayMode::RepeatAll || self.wrap_at_end {
-            self.pos = 0;
-            Advance::To(0)
-        } else {
-            Advance::Stop
+        let wrap = self.mode == PlayMode::RepeatAll || self.wrap_at_end;
+        let mut n = self.pos;
+
+        // 最多走一圈：走满还没碰到能播的，就是整队都播不了
+        for _ in 0..self.order.len() {
+            if n + 1 < self.order.len() {
+                n += 1;
+            } else if wrap {
+                n = 0;
+            } else {
+                return Advance::Stop;
+            }
+
+            if self.playable_at(n) {
+                self.pos = n;
+                return Advance::To(n);
+            }
         }
+
+        Advance::Stop
     }
 
-    /// 已在首位时重播当前曲而非绕到末尾 —— 播放器普遍的手感约定。
+    /// 已在首位时重播当前曲而非绕到末尾。同样跳过播不了的曲目；
+    /// 光标之前一首能播的都没有时，退回「重播当前」。
     pub fn prev(&mut self) -> Advance {
         if self.order.is_empty() {
             return Advance::Stop;
         }
-        if self.pos > 0 {
-            self.pos -= 1;
-            Advance::To(self.pos)
-        } else if self.mode == PlayMode::RepeatAll || self.wrap_at_end {
-            self.pos = self.order.len() - 1;
-            Advance::To(self.pos)
-        } else {
-            Advance::Restart
+        let wrap = self.mode == PlayMode::RepeatAll || self.wrap_at_end;
+        let mut n = self.pos;
+
+        for _ in 0..self.order.len() {
+            if n > 0 {
+                n -= 1;
+            } else if wrap {
+                n = self.order.len() - 1;
+            } else {
+                return Advance::Restart;
+            }
+
+            if self.playable_at(n) {
+                self.pos = n;
+                return Advance::To(n);
+            }
         }
+
+        Advance::Restart
+    }
+
+    /// 播放顺序第 `n` 位能不能播。位置越界（理论上不该发生）当作能播 ——
+    /// 一个悬空下标不该把整条队列卡死。
+    fn playable_at(&self, n: usize) -> bool {
+        self.track_at_order(n).is_none_or(Track::is_playable)
     }
 
     /// 一首歌自然播完：与 [`Playlist::next`] 的区别是单曲循环只在此时回头重播。
@@ -509,7 +538,7 @@ impl Playlist {
 }
 
 fn shuffle(ids: &mut [TrackId], seed: u64) {
-    // xorshift64：不要密码学强度，但同 seed 必须同结果，测试才能断言
+    // xorshift64：不要密码学强度，但同 seed 必须同结果
     let mut state = seed | 1; // 状态不能为 0
     for i in (1..ids.len()).rev() {
         state ^= state << 13;
@@ -525,11 +554,20 @@ mod tests {
     use super::*;
     use std::path::PathBuf;
 
-    fn track(n: usize) -> Track {
-        let path = PathBuf::from(format!("/music/{n}.flac"));
+    fn track_ext(n: usize, ext: &str) -> Track {
+        let path = PathBuf::from(format!("/music/{n}.{ext}"));
         let mut t = Track::fallback(&path);
         t.title = format!("Track {n}");
         t
+    }
+
+    fn track(n: usize) -> Track {
+        track_ext(n, "flac")
+    }
+
+    /// 引擎放不出来的一首：`.wma` 没有解码实现。
+    fn unplayable(n: usize) -> Track {
+        track_ext(n, "wma")
     }
 
     fn playlist(n: usize) -> Playlist {
@@ -538,7 +576,6 @@ mod tests {
         p
     }
 
-    /// 造一首标题受控的曲目，用来测排序。
     fn titled(n: usize, title: &str) -> Track {
         let mut t = track(n);
         t.title = title.to_owned();
@@ -709,6 +746,116 @@ mod tests {
         assert_eq!(p.cursor(), 2, "停下时光标不应越界");
     }
 
+    /// 播不了的曲目照常留在曲库里，但队列不在它上面停留。
+    #[test]
+    fn queue_skips_tracks_the_engine_cannot_decode() {
+        let mut p = Playlist::new();
+        p.push([track(0), unplayable(1), track(2)]);
+
+        assert_eq!(p.len(), 3, "播不了的也要入库，只是不能播");
+        assert_eq!(p.next(), Advance::To(2), "播不了的那首应当被跳过");
+        assert_eq!(p.current().unwrap().id, track(2).id);
+
+        p.play_order_index(2);
+        assert_eq!(p.prev(), Advance::To(0), "往回走同样要跳过它");
+        assert_eq!(p.current().unwrap().id, track(0).id);
+    }
+
+    #[test]
+    fn consecutive_unplayable_tracks_are_all_skipped() {
+        let mut p = Playlist::new();
+        p.push([
+            track(0),
+            unplayable(1),
+            unplayable(2),
+            unplayable(3),
+            track(4),
+        ]);
+
+        assert_eq!(
+            p.next(),
+            Advance::To(4),
+            "连着三首都播不了应当一路跳到能播的"
+        );
+        assert_eq!(p.current().unwrap().id, track(4).id);
+    }
+
+    /// 整队都播不了不能原地打转，也不能假装播得了 —— 一律当成走到头。
+    #[test]
+    fn an_entirely_unplayable_queue_stops_instead_of_spinning() {
+        let mut p = Playlist::new();
+        p.push([unplayable(0), unplayable(1), unplayable(2)]);
+
+        assert_eq!(p.next(), Advance::Stop, "顺序模式");
+        assert_eq!(p.prev(), Advance::Restart, "往回走按既有约定重播当前");
+
+        // 循环档位也不能让它绕圈：绕一圈还是全播不了
+        p.set_mode(PlayMode::RepeatAll, 1);
+        assert_eq!(p.next(), Advance::Stop, "列表循环下同样应当停下");
+        p.set_mode(PlayMode::RepeatOne, 1);
+        assert_eq!(p.next(), Advance::Stop, "单曲循环下手动切歌同样应当停下");
+    }
+
+    /// 循环模式下绕一圈能回到当前这首时，就该继续播它 —— 它是队列里唯一能播的。
+    #[test]
+    fn wrapping_back_to_the_only_playable_track_keeps_playing() {
+        let mut p = Playlist::new();
+        p.push([track(0), unplayable(1), unplayable(2)]);
+        p.set_mode(PlayMode::RepeatAll, 1);
+
+        assert_eq!(p.next(), Advance::To(0), "绕一圈只有当前这首能播，就还播它");
+        assert_eq!(p.current().unwrap().id, track(0).id);
+    }
+
+    /// 自然播完那一拍走的是同一条路，不然一首 ape 放完就会卡在它上面。
+    #[test]
+    fn finishing_a_track_also_skips_unplayable_ones() {
+        let mut p = Playlist::new();
+        p.push([track(0), unplayable(1), track(2)]);
+
+        assert_eq!(p.on_track_ended(), Advance::To(2));
+        assert_eq!(p.current().unwrap().id, track(2).id);
+
+        // 单曲循环只在「播完的是能播的那首」时才原地重播
+        p.set_mode(PlayMode::RepeatOne, 1);
+        assert_eq!(p.on_track_ended(), Advance::Restart);
+    }
+
+    /// 队列已定时跳过同样只在队列内部生效，不会滑到队列外的能播曲目上去。
+    #[test]
+    fn skipping_never_escapes_a_pinned_queue() {
+        let mut p = Playlist::new();
+        // `set_queue` 会丢掉库里没有的 id，队列成员必须先真的在曲库里
+        p.push([track(0), unplayable(1), track(2)]);
+        p.set_queue(Some(vec![track(0).id, unplayable(1).id]), 7);
+        assert_eq!(p.order().len(), 2, "先确认队列真的有两首");
+
+        assert_eq!(
+            p.next(),
+            Advance::Stop,
+            "队列里只剩一首播不了的，就该停，不能滑进整库那首能播的"
+        );
+    }
+
+    /// 光标落在播不了的曲目上时（比如刚导入、`pos` 还在 0），下一曲仍要一路找到能播的那首。
+    #[test]
+    fn a_cursor_sitting_on_an_unplayable_track_can_still_move_on() {
+        let mut p = Playlist::new();
+        p.push([unplayable(0), unplayable(1), track(2)]);
+
+        assert_eq!(
+            p.current().unwrap().id,
+            unplayable(0).id,
+            "起始光标就在它上面"
+        );
+        assert_eq!(
+            p.next(),
+            Advance::To(2),
+            "从它出发也要越过播不了的找到能播的"
+        );
+        assert_eq!(p.current().unwrap().id, track(2).id);
+    }
+
     #[test]
     fn repeat_all_wraps_to_head() {
         let mut p = playlist(3);
@@ -763,7 +910,6 @@ mod tests {
         let mut seen = std::collections::HashSet::new();
         seen.insert(p.current_id().unwrap());
 
-        // 一路 next 到底，途中不允许重复、也不允许提前停下
         while let Advance::To(_) = p.next() {
             let id = p.current_id().unwrap();
             assert!(seen.insert(id), "随机序在走完一轮之前不应重复出现同一首");
@@ -788,7 +934,6 @@ mod tests {
         );
         assert_eq!(p.cursor(), 0, "当前曲目应当被旋转到随机序首位");
 
-        // 从当前位置走到底，剩下的 19 首必须全部走到
         let mut seen = std::collections::HashSet::from([playing]);
         while let Advance::To(_) = p.next() {
             seen.insert(p.current_id().unwrap());

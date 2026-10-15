@@ -5,7 +5,6 @@ use std::collections::HashSet;
 
 use crate::persist;
 
-/// 落盘文件名。
 const FILE: &str = "follows.json";
 
 /// 用 `HashSet`：详情页与右面板每帧都要问「这位艺术家关注了吗」，`Vec` 的线性查找可测量。

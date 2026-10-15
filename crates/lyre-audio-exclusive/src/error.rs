@@ -45,5 +45,4 @@ impl From<ExclusiveError> for lyre_audio::AudioError {
     }
 }
 
-/// 独占链路的 `Result`。
 pub type Result<T> = std::result::Result<T, ExclusiveError>;

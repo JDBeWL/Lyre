@@ -32,7 +32,7 @@ actions!(
         RemoveFocused,
         /// 聚焦搜索框（`/` 或 `Ctrl+K`）
         FocusSearch,
-        /// 随机播放二态直达：非随机时按下进随机，已是随机则回到顺序。共用 `PlayMode` 枚举。
+        /// 随机播放二态直达：非随机时按下进随机，已是随机则回到顺序。
         ToggleShuffle,
         /// 一次只退一步，撤销的是上一步而不是重置界面。
         Escape,

@@ -7,7 +7,7 @@ use crate::platform::*;
 pub fn window_base() -> Rgba {
     rgb(0x000000)
 }
-/// 主内容区，也是所有卡片（侧栏卡片、主区卡片、右面板卡片）的底色。
+/// 主内容区，也是所有卡片（侧栏 / 主区 / 右面板）的底色。
 pub fn bg() -> Rgba {
     rgb(0x121212)
 }
@@ -16,7 +16,7 @@ pub fn chrome() -> Rgba {
     rgb(0x000000)
 }
 
-/// 侧边栏 / 右面板卡片的背景，与 [`bg`] 刻意同色：分区靠缝，测试钉住两者相等。
+/// 侧边栏 / 右面板卡片的背景，与 [`bg`] 刻意同色，相等由测试钉住。
 pub fn panel() -> Rgba {
     rgb(0x121212)
 }
@@ -33,7 +33,7 @@ pub fn hero_tint(seed: Option<&str>) -> Rgba {
         (0x63, 0x56, 0x3f), // 灰棕
     ];
 
-    // 兜底色要比 `bg` 亮才看得出渐变，明度对齐 `TINTS` 才不会在有/无种子之间跳。
+    // 兜底色的明度对齐 `TINTS`，有 / 无种子之间才不跳档。
     let Some(seed) = seed else {
         return rgb(0x3a_3f_4a);
     };
@@ -60,7 +60,7 @@ pub fn hover() -> Rgba {
     rgb(0x1a1a1a)
 }
 /// 键盘光标所在行的底色，比 [`elevated`] 亮一档。
-/// 必须与 [`hover`] 分两个令牌：`hover` 对 [`bg`] 只有 1.08:1，同色时分不清「指针压着」与「光标在这」。
+/// 必须与 [`hover`] 分成两个令牌：`hover` 对 [`bg`] 只有 1.08:1，同色就认不出哪行是光标。
 pub fn cursor() -> Rgba {
     rgb(0x2a2a2a)
 }
@@ -84,7 +84,7 @@ pub fn text_faint() -> Rgba {
     rgb(0xa7a7a7)
 }
 
-/// 品牌绿：正在播的行、行首竖条、无损徽章、爱心。控件的填充走 [`control`]。
+/// 品牌绿：正在播的行、行首竖条、无损徽章、爱心。
 pub fn accent() -> Rgba {
     rgb(0x1db954)
 }
@@ -101,7 +101,7 @@ pub fn accent_soft() -> Rgba {
 }
 
 /// 主控件的填充色：播放键、进度条与音量条的已播段、输入框光标。
-/// 与 [`fn@text`] 同值但语义不同 —— 那是文字色，这一档是「能按、在动」的东西。
+/// 与 [`fn@text`] 同值但是两个令牌：改文字色不该连带改掉控件填充。
 pub fn control() -> Rgba {
     rgb(0xffffff)
 }
@@ -129,7 +129,7 @@ pub fn success() -> Rgba {
     rgb(0x1db954)
 }
 
-/// 进度 / 音量轨道的底色，要和已播段那一档白拉开对比。
+/// 进度 / 音量轨道的底色，已播段是 [`control`] 那一档白。
 pub fn track() -> Rgba {
     rgb(0x555555)
 }
@@ -143,8 +143,6 @@ pub fn tag_bg() -> Rgba {
 pub fn transparent() -> Rgba {
     rgba(0x00000000)
 }
-
-// 字重从 600 起：500 在深色底上几乎看不出粗细变化。
 
 /// 徽标、快捷键提示
 pub const FONT_MICRO: f32 = 11.0;
@@ -194,11 +192,14 @@ pub const GAP_MD: f32 = 12.0;
 pub const GAP_LG: f32 = 16.0;
 pub const GAP_XL: f32 = 24.0;
 
+/// 引擎播不了的曲目在列表里压暗到此值（判据见 [`lyre_core::Track::is_playable`]）。
+/// 留一半而不是更低：键盘光标的竖条也画在同一层里，压得太狠就找不着它了。
+pub const UNPLAYABLE_OPACITY: f32 = 0.5;
+
 /// 顶部栏高度：32px 的按钮 + 上下各 8px（窗口控件同尺寸，见 `window_controls`）。
 pub const TOP_BAR_H: f32 = 48.0;
 pub const BOTTOM_BAR_H: f32 = 80.0;
 /// 底部控制栏在窄窗口下的高度（两行：传输区 + 进度条）。多出的 24px = 进度条行 22px + 一档间距。
-/// 切换阈值见 `shell::STACKED_BOTTOM_MIN`。
 pub const BOTTOM_BAR_H_STACKED: f32 = 104.0;
 
 /// 底栏高度。底栏自己和根视图的 toast 定位都要读它，两处各算一遍会让 toast 压住底栏。
@@ -218,8 +219,7 @@ pub const SIDEBAR_INDICATOR_W: f32 = 3.0;
 pub const RIGHT_PANEL_W: f32 = 320.0;
 /// 底栏左栏宽度（曲目身份）。
 pub const BOTTOM_LEFT_W: f32 = 240.0;
-/// 底栏右栏宽度（功能入口 + 音量）。
-/// 比 [`BOTTOM_LEFT_W`] 宽：那一排入口在 240px 里放不下。
+/// 底栏右栏宽度（功能入口 + 音量）；那一排入口在 240px 里放不下，所以比 [`BOTTOM_LEFT_W`] 宽。
 pub const BOTTOM_RIGHT_W: f32 = 320.0;
 pub const BOTTOM_CENTER_MAX: f32 = 620.0;
 pub const ROW_H_COMPACT: f32 = 40.0;
@@ -234,9 +234,8 @@ pub const MINI_COVER: f32 = 56.0;
 /// 键盘焦点环的宽度。画在元素外侧，不占布局。
 pub const FOCUS_RING_W: f32 = 2.0;
 
-/// 键盘焦点环，给 gpui 的 `.focus_visible()` 用（只在上一次输入是键盘时应用，鼠标点过的不留圈）。
 /// 用 `box_shadow` 而不是 `border`：gpui 的盒子高度含 border，聚焦那一帧会把元素撑大一圈。
-/// 颜色写成 [`accent_text`] 的 HSL 形式：gpui 的 `BoxShadow` 只吃 `Hsla`，没有 `Rgba → Hsla` 的转换。
+/// 颜色写成 [`accent_text`] 的 HSL：gpui 的 `BoxShadow` 只吃 `Hsla`，没有 Rgba → Hsla 的转换。
 fn focus_ring_color() -> Hsla {
     // gpui 的 `Hsla.h` 是 0–1 的圈数而不是角度（`From<Hsla> for Rgba` 里直接拿 `h * 6.0` 取区间），
     // 写成 141.4 会被当成绕了 141 圈、落在别的色相上。
@@ -279,8 +278,8 @@ fn over(fg: Rgba, bg: Rgba) -> Rgba {
     }
 }
 
-/// WCAG 2.1 对比度，返回 1.0 ~ 21.0。两个参数都允许带透明度，先依次压到窗口底色上再算。
-/// 这一步不能省：`accent_soft` 这类半透明标记色只有合成后才是屏幕上真正的颜色。
+/// WCAG 2.1 对比度，返回 1.0 ~ 21.0。两个参数都允许带透明度，先依次压到 [`bg`] 上再算。
+/// 半透明的标记色（如 `accent_soft`）只有合成后才是屏幕上真正的颜色。
 #[cfg(test)]
 fn contrast_ratio(foreground: Rgba, background: Rgba) -> f32 {
     let base = bg();
@@ -294,7 +293,7 @@ fn contrast_ratio(foreground: Rgba, background: Rgba) -> f32 {
 
 #[cfg(test)]
 mod tests {
-    // 不用 glob 导入：`platform::*` 里的 gpui `test` 宏会遮蔽内置 `#[test]`，导致无限递归（见 platform.rs）。
+    // 不用 glob 导入：`platform::*` 里的 gpui `test` 宏会遮蔽内置 `#[test]`，导致无限递归。
     use crate::platform::{Rgba, rgb};
 
     use super::contrast_ratio;
@@ -303,7 +302,6 @@ mod tests {
     /// WCAG AA 正文的门槛。
     const AA: f32 = 4.5;
 
-    /// 断言这对前景 / 背景达到 AA。
     fn assert_pass(fg: Rgba, bg: Rgba, name: &str) {
         let ratio = contrast_ratio(fg, bg);
         assert!(
@@ -314,7 +312,7 @@ mod tests {
 
     #[test]
     fn text_colors_pass_aa_on_every_background_layer() {
-        // chrome 也在被测层里：顶栏 / 底栏全屏常驻、文字最密。
+        // chrome 也在被测层里：顶栏 / 底栏全屏常驻，文字直接压在它们上面。
         let layers = [
             ("bg", super::bg()),
             ("panel", super::panel()),
@@ -356,7 +354,6 @@ mod tests {
             "glyph on control_hover",
         );
 
-        // 反向锁定：控件上的图形必须是黑的，白压白看不见。
         let white_on_control = contrast_ratio(super::text(), super::control());
         assert!(
             white_on_control < AA,
@@ -366,7 +363,7 @@ mod tests {
 
     #[test]
     fn window_close_button_uses_black_glyph_on_red() {
-        // 窗口关闭键悬停时是红底 + 叉，Windows 原生样式用白叉；白压红达不到 AA，符号必须用 text_on_danger。
+        // 关闭键悬停是红底 + 叉；白叉达不到 AA，符号必须用 text_on_danger。
         assert_pass(
             super::text_on_danger(),
             super::danger(),
@@ -401,7 +398,7 @@ mod tests {
         assert!(bg > gap + 1e-6, "主区卡片必须比缝亮");
         assert!(bg > chrome + 1e-6, "主区卡片必须比窗口外壳亮");
 
-        // 三块卡片同色是有意的，锁住它以免侧栏被调回纯黑、让缝在那一侧失效。
+        // 三块卡片同色是有意的：侧栏调回纯黑会让那一侧的缝失效。
         assert_eq!(
             super::panel(),
             super::bg(),
@@ -465,7 +462,7 @@ mod tests {
 
     #[test]
     fn settings_selection_is_readable_without_color() {
-        // 分段控件里未选中的那格：次要文字压在比卡片更暗的轨道底（`bg`）上，必须达标。
+        // 分段控件里未选中的那格：次要文字压在轨道底（`bg`）上，必须达标。
         assert_pass(super::text_muted(), super::bg(), "未选中分段文字 on 轨道底");
         assert_pass(
             super::text_on_control(),
@@ -576,7 +573,7 @@ mod tests {
 
     #[test]
     fn luminance_endpoints_are_sane() {
-        // 白 1.0 / 黑 0.0，对比度 21:1 —— 顺便验证公式本身没写反
+        // 白 1.0 / 黑 0.0，对比度 21:1 —— 顺带验证亮度公式没写反。
         let white = rgb(0xffffff);
         let black = rgb(0x000000);
         assert!((relative_luminance(white) - 1.0).abs() < 1e-4);

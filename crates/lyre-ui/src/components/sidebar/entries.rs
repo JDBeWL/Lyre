@@ -44,8 +44,8 @@ pub(super) fn listing_for(nav: NavSection) -> Listing {
 /// 侧栏列表里的一行 —— 专辑、艺术家、歌单或收藏。
 #[derive(Clone)]
 pub(super) struct SideEntry {
-    /// 行的稳定标识，用作元素 id 与 group 名。不能用标题：
-    /// 专辑与艺术家可以同名，歌单也允许重名，撞了 id 的两行会共享悬停态。
+    /// 行的稳定标识，用作元素 id 与 group 名。不能用标题：专辑、艺术家、歌单都可能重名，
+    /// 撞了 id 的两行会共享悬停态。
     key: String,
     /// 用来「播这一行」的代表曲目。空歌单没有，此时不画播放键。
     pub(super) id: Option<lyre_core::TrackId>,
@@ -206,10 +206,10 @@ pub(super) fn lib_row(
     covers: &Entity<CoverCache>,
     cx: &mut App,
 ) -> AnyElement {
-    // 判据只有「作用域标签等于这一行标题，且作用域种类对得上」—— 不掺 `nav_section`。
+    // 判据只有「作用域标签等于这一行标题，且种类对得上」—— 不掺 `nav_section`：
+    // 同名的专辑和艺术家不是同一个东西。
     let selected = {
         let scope = App::update_entity(cx, &library, |library, _| library.scope().clone());
-        // 类型和名字都要对上：同名的专辑和艺术家不是同一个东西。
         match (&entry.scope, &scope) {
             (SideScope::Album, Scope::Album(title)) => title == &entry.title,
             (SideScope::Artist, Scope::Artist(name)) => name == &entry.title,
@@ -234,7 +234,7 @@ pub(super) fn lib_row(
         .flex_none()
         .h(px(LIB_ROW_H))
         // `w_full` + `min_w_0` 缺一不可：`uniform_list` 的行默认按内容定宽，
-        // 那样长标题不截断、行尾喇叭随名字漂移、底色也铺不满整行。
+        // 长标题会把行顶宽、不截断，底色也铺不满整行。
         .w_full()
         .min_w_0()
         .flex()
@@ -261,7 +261,7 @@ pub(super) fn lib_row(
                 });
                 let Some(scope) = scope else { return };
 
-                // 侧栏是「换个地方看」，所以这一条入口要能返回 —— 压历史必须在收窄之前。
+                // 压历史必须在收窄之前，否则返回没有落点。
                 let here = {
                     let section = shell.read(cx).nav_section();
                     let current =
@@ -279,11 +279,10 @@ pub(super) fn lib_row(
                 .min_w_0()
                 .flex()
                 .flex_col()
-                // 2px：14px 与 12px 两行各自还有约 2px 行距余量，1px 时视觉上仍贴在一起。
                 .gap(px(2.))
                 .child(
                     div()
-                        // tooltip 要求元素有 id。和 `side-row-*` 同源派生，所以重名专辑也不会撞 id。
+                        // tooltip 要求元素有 id；与 `side-row-*` 同源派生，重名专辑也不撞 id。
                         .id(SharedString::from(format!("side-title-{}", entry.key)))
                         .text_size(px(theme::FONT_TRACK))
                         .font_weight(if selected {
@@ -310,7 +309,6 @@ pub(super) fn lib_row(
         );
 
     if selected {
-        // 中间列的 `flex_1` 把喇叭推到行右缘，位置才不随标题长短漂移。
         row = row.child(
             div()
                 .flex_none()
@@ -319,7 +317,6 @@ pub(super) fn lib_row(
                 .child(icon_inherit(Glyph::VolumeHigh, 14.)),
         );
     } else if let Some(id) = entry.id {
-        // 未选中行：悬停才浮现白色播放键（选中行用喇叭，两者占同一个行尾槽位）。
         row = row.child(row_play_button(group, id, &play_title, play_library));
     }
 
@@ -333,7 +330,7 @@ pub(super) fn lib_row(
     }
 }
 
-/// 行尾的悬浮播放键：常驻占位、靠 `group_hover` 改透明度显隐（显隐不做视图状态）。
+/// 行尾的悬浮播放键：常驻占位，靠 `group_hover` 改透明度显隐。
 /// 它嵌在「点开分组」的整行里，必须阻断冒泡，否则一次点击同时播放并跳详情。
 fn row_play_button(
     group: SharedString,
@@ -357,7 +354,6 @@ fn row_play_button(
         .hover(|style| style.bg(theme::control_hover()))
         .on_click(move |_, _, cx| {
             cx.stop_propagation();
-            // 播放统一走 `activate`，不在这里自己改 cursor。
             library.update(cx, |library, cx| library.activate(id, cx));
         })
         .tooltip(tooltip::builder(format!("播放《{title}》")))

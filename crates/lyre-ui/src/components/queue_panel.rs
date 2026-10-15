@@ -1,5 +1,5 @@
 //! 右侧面板的「队列」页签：显示真实播放顺序（`Playlist::order`），随机模式下与曲库顺序完全不同。
-//! 不参与搜索、不做增删 —— 队列是由播放模式决定的产物。
+//! 这里不参与搜索也不增删曲目，顺序只由播放模式决定。
 
 use lyre_core::{PlayMode, Track, TrackId, format_duration};
 
@@ -26,7 +26,7 @@ pub struct QueuePanel {
     _sub: Subscription,
     scroll: UniformListScrollHandle,
     // `observe(library)` 在任何曲库变化时都会触发，所以记住上次定位的曲目，
-    // 只在正在播放的那首真的换了时才滚动，否则用户翻看队列时会被莫名拽回去。
+    // 只在正在播放的那首真的换了时才滚动，否则用户翻看队列时会被拽回当前曲。
     last_anchored: Option<TrackId>,
 }
 
@@ -45,7 +45,7 @@ impl QueuePanel {
         }
     }
 
-    /// 换曲后把当前这首滚到可视区顶部附近。
+    /// 换曲后把正在播的那一行滚进可视区。
     /// `Nearest` 而不是 `Center` / `Top`：已在可视区时什么都不做，不打断用户自己翻看。
     fn anchor(&mut self, library: &Entity<LibraryEntity>, cx: &mut Context<Self>) {
         let current = library.read(cx).now_playing();
@@ -57,7 +57,7 @@ impl QueuePanel {
             return;
         }
 
-        // 锚点是正在播的那一行本身，不是 `PLAYED_CONTEXT`：已播那段实际是 0~4 首，
+        // 锚点是正在播的那一行本身，不是 `PLAYED_CONTEXT`：已播那段可能比它短，
         // 分段标签还要再占一行。行号只能由 `build_entries` 给出。
         let read = library.read(cx);
         let rows = build_entries(
@@ -163,7 +163,8 @@ impl Render for QueuePanel {
         div()
             .flex_none()
             .w(px(theme::RIGHT_PANEL_W))
-            // 只写 `w()` 压不住内容：flex 默认 `min-width: auto`，长歌名会把面板顶宽。`min_w` + `max_w` 钉死。
+            // 只写 `w()` 压不住内容：flex 默认 `min-width: auto`，长歌名会把面板顶宽，
+            // 要 `min_w` + `max_w` 一起钉死。
             .min_w(px(theme::RIGHT_PANEL_W))
             .max_w(px(theme::RIGHT_PANEL_W))
             .overflow_hidden()
@@ -191,8 +192,7 @@ impl Render for QueuePanel {
 /// 队列列表里的一项：曲目或分段标签。
 #[derive(Clone)]
 enum QueueEntry {
-    /// 一行曲目。`number` 是显示序号，按曲目数而不是行数 —— 分段标签占一行但不占号，
-    /// 否则编号会在标签处跳一格（`5 → 7`），看起来像少了一首。
+    /// 一行曲目。`number` 是显示序号，按曲目数而不是行数递增 —— 分段标签占一行但不占号。
     Track {
         track: Track,
         kind: RowKind,
@@ -216,9 +216,8 @@ impl QueueRows {
     }
 }
 
-/// 把「已播 / 待播」两段拼成一条连续队列，中间插分段标签。
+/// 把「已播 / 待播」两段拼成一条连续队列：标签只在两段都非空时插入，序号按曲目连续、标签不占号。
 /// `upcoming` 第一首只有与 `now_playing` 相同才算 [`RowKind::Current`]。
-/// 标签只在两段都非空时插入；序号按曲目连续、标签不占号。
 fn build_entries(played: Vec<Track>, upcoming: Vec<Track>, current: Option<TrackId>) -> QueueRows {
     let played_count = played.len();
     let mut rows: Vec<QueueEntry> = Vec::with_capacity(played_count + upcoming.len() + 1);
@@ -298,7 +297,6 @@ fn section_divider(label: &'static str) -> impl IntoElement {
         .child(div().flex_1().h(px(1.)).bg(theme::border_soft()))
 }
 
-/// 空队列状态。「曲库为空」和「有库但没开始播」的文案必须分开，否则会被读成导入失败。
 fn empty_queue(total: usize) -> AnyElement {
     let (hint, detail) = if total == 0 {
         ("队列是空的", "先导入音乐，队列才会有内容")
@@ -339,7 +337,6 @@ pub enum RowKind {
     Upcoming,
 }
 
-/// 模式徽标：随机模式下队列顺序与曲库完全不同，得在旁边说明这不是排序错了。
 fn mode_badge(mode: PlayMode) -> impl IntoElement {
     let (label, glyph, active) = match mode {
         PlayMode::Sequential => ("顺序", Glyph::List, false),
@@ -378,7 +375,7 @@ fn mode_badge(mode: PlayMode) -> impl IntoElement {
 }
 
 /// 队列的一行。`kind` 决定配色，点一下跳到这一首。
-/// `number` 既用于显示也用于元素 id：id 跟着曲目而不是行数，换曲时标签增减才不会让滚动错位。
+/// `number` 兼作元素 id：id 跟着曲目而不是行数，换曲时标签增减才不会让滚动错位。
 fn queue_row(
     number: usize,
     track: &Track,
@@ -411,7 +408,8 @@ fn queue_row(
         .id(("queue-row", number))
         .group(group.clone())
         .flex_none()
-        // `uniform_list` 的行默认按内容定宽：`w_full` 才让时长有右对齐的参照系，`min_w_0` 才允许标题列收缩。
+        // `uniform_list` 的行默认按内容定宽：`w_full` 给时长列右对齐的参照系，
+        // `min_w_0` 才允许标题列收缩。
         .w_full()
         .min_w_0()
         .h(px(ROW_H))
@@ -461,8 +459,8 @@ fn queue_row(
         ))
         .child(title_cell(track, title_color, meta_color));
 
-    // 时长列固定宽度而不是 `flex_1`：后者的右边界取决于标题长度，列位置会随内容浮动。
-    let row = row.child(
+    // 时长列固定宽度而不是 `flex_1`：后者的右边界取决于标题长度，会把这一列顶宽。
+    let mut row = row.child(
         div()
             .flex_none()
             .w(px(DURATION_W))
@@ -477,7 +475,14 @@ fn queue_row(
             .child(duration),
     );
 
-    // 菜单与曲库行 / 搜索结果共用一份，但这里的「播放」只能跳播、不能重设队列 —— 否则随机模式会被洗回曲库顺序。
+    // 引擎解不了的格式照常列出，只压暗并给出原因；队列推进会跳过它们，点击只得到一条提示。
+    if let Some(reason) = track.unplayable_reason() {
+        row = row
+            .opacity(theme::UNPLAYABLE_OPACITY)
+            .tooltip(crate::common::tooltip::builder(reason));
+    }
+
+    // 这里的「播放」只能跳播、不能重设队列 —— 重设会把随机顺序洗回曲库顺序。
     let hooks = crate::common::menu::TrackMenuHooks::none().play({
         let library = library.clone();
         move |id, cx| {
@@ -494,7 +499,7 @@ fn queue_row(
 }
 
 /// 序号位：平时是序号，悬停时换成 ▶，点一下跳到这一首。
-/// 两层重叠在同一格、用 `group_hover` 切透明度：每行维护 `hovered` 布尔的话，鼠标滑过每行都会 `notify`。
+/// 两层重叠在同一格，靠 `group_hover` 切透明度：逐行记 `hovered` 的话，滑过每行都要 `notify`。
 fn index_cell(
     number: usize,
     current: bool,
@@ -558,7 +563,7 @@ fn index_cell(
         .into_any_element()
 }
 
-/// 标题格：第一行歌名，第二行「艺术家 · 专辑」；`flex_1` + `min_w_0` 让时长列位置稳定。
+/// 标题格：第一行歌名，第二行「艺术家 · 专辑」。
 fn title_cell(track: &Track, title_color: Rgba, meta_color: Rgba) -> impl IntoElement {
     let subtitle = track.subtitle();
 
@@ -681,7 +686,6 @@ mod tests {
 
     #[test]
     fn the_cursor_row_is_not_current_until_it_actually_plays() {
-        // 刚导入时光标指向第一首但并没在播，没有 `now_playing` 就只能算待播。
         let rows = build_entries(Vec::new(), vec![track("a"), track("b")], None);
 
         assert_eq!(kinds(&rows), [RowKind::Upcoming, RowKind::Upcoming]);
@@ -690,7 +694,6 @@ mod tests {
 
     #[test]
     fn a_different_track_playing_leaves_the_cursor_row_upcoming() {
-        // 正在播的那首不在待播区里时，光标那一行同样不该点亮。
         let rows = build_entries(
             vec![track("a")],
             vec![track("b"), track("c")],
@@ -741,7 +744,6 @@ mod tests {
 
     #[test]
     fn divider_label_follows_playback_state() {
-        // 未在播放时，下面的是「从这里开始播」而不是「接下来会播的」。
         let playing = build_entries(vec![track("a")], vec![track("b")], Some(track("b").id));
         let stopped = build_entries(vec![track("a")], vec![track("b")], None);
 
@@ -779,7 +781,6 @@ mod tests {
 
     #[test]
     fn track_numbers_start_at_one_without_a_divider() {
-        // 无标签时同样从 1 递增：防的是「按行号算」的实现。
         let rows = build_entries(
             Vec::new(),
             vec![track("a"), track("b")],
@@ -789,8 +790,7 @@ mod tests {
         assert_eq!(numbers(&rows), [1, 2]);
     }
 
-    /// 滚动锚点是正在播的那一行本身，已播那段多长都不影响这个性质。
-    /// 这一条覆盖 0~5 档：把 `PLAYED_CONTEXT` 当锚点时，短的几档全会偏。
+    /// 滚动锚点是正在播的那一行本身；已播那段 0~5 首时都一样，取 `PLAYED_CONTEXT` 当锚点会偏。
     #[test]
     fn the_anchor_is_the_current_row_however_long_the_played_block_is() {
         for played in 0..=PLAYED_CONTEXT {
@@ -835,7 +835,7 @@ mod tests {
         );
     }
 
-    /// 没在播时下面那段是「待播放」，第一行不算「当前」—— 没有锚点，别乱滚。
+    /// 没在播时下面那段是「待播放」，第一行不算「当前」，没有锚点。
     #[test]
     fn there_is_no_anchor_when_nothing_is_playing() {
         let rows = build_entries(vec![track("p0")], vec![track("a"), track("b")], None);
@@ -844,7 +844,7 @@ mod tests {
         assert_eq!(rows.current_row, None);
     }
 
-    /// 正在播的那首不在待播区里时同样没有锚点：此时一条高亮都没有，滚到哪里都是错的。
+    /// 正在播的那首不在待播区里时同样没有锚点，此时一行高亮都没有。
     #[test]
     fn there_is_no_anchor_when_the_playing_track_is_off_the_upcoming_block() {
         let rows = build_entries(

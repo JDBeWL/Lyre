@@ -1,11 +1,6 @@
-//! 交错 f32 采样 → 声卡要的 PCM 字节。
-//!
-//! 独占输出的渲染线程每轮都要把一整块采样交出去，这一步是那条链路上最费 CPU 的一段。
-//! `F32` 走零拷贝视图（内存布局本来就一样），整数格式走 AVX2 / SSE2 内核，标量实现既是
-//! 兜底也是测试基准 —— SIMD 的结果必须与它一致到 1 LSB 以内。
-//!
-//! 需要 `unsafe` 的只有 SIMD 内核，所以整个 crate 自带一份 `[lints]` 局部放开，
-//! 其余 crate 仍然继承 workspace 的 `unsafe_code = "forbid"`。
+//! 交错 f32 采样 → 声卡要的 PCM 字节，独占渲染链路上最费 CPU 的一段。
+//! `F32` 走零拷贝视图，整数格式走 AVX2 / SSE2 内核，标量既兜底也是基准（差不得超过 1 LSB）。
+//! 只有 SIMD 内核需要 `unsafe`：`[lints]` 在本 crate 局部放开，其余 crate 仍继承 forbid。
 
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 mod x86;
@@ -57,10 +52,7 @@ pub fn write(samples: &[f32], format: PcmFormat, out: &mut Vec<u8>) {
     }
 }
 
-/// `F32` 格式的零拷贝视图：f32 与设备要的字节布局本来就一样，
-/// 独占输出最常协商到的就是这个格式，整条转换链可以整个省掉。
-///
-/// 小端平台上 `[f32]` 的内存布局与 WASAPI 要的交错 32 位浮点完全一致。
+/// `F32` 的零拷贝视图：布局与小端平台上 WASAPI 要的交错 32 位浮点完全一致，整条转换链省掉。
 pub fn f32_as_bytes(samples: &[f32]) -> &[u8] {
     let len = std::mem::size_of_val(samples);
     // SAFETY: `f32` 对齐不低于 `u8`，长度由切片长度乘以 4 得出不会越界；
@@ -118,10 +110,8 @@ fn int16(samples: &[f32], out: &mut Vec<u8>) {
     scalar::i16(samples, out);
 }
 
-/// 标量实现。既是所有平台上的兜底，也是 SIMD 内核的测试基准。
-///
-/// 满刻度用「先乘 2^(n-1) 再饱和转整」：+1.0 会算到 2^(n-1)，由饱和落到最大值，
-/// 与 cpal 从 f32 转整数的取法一致，共享模式与独占模式在这一点上不会打架。
+/// 标量实现：所有平台的兜底，也是 SIMD 内核的测试基准。
+/// 满刻度先乘 2^(n-1) 再饱和转整，与 cpal 的 f32 → 整数取法一致，两种模式不会打架。
 mod scalar {
     use super::PcmFormat;
 
@@ -163,7 +153,6 @@ mod scalar {
 mod tests {
     use super::*;
 
-    /// 每个格式都覆盖：静音、小幅、满刻度、越界、以及两类特殊值
     fn probes() -> Vec<Vec<f32>> {
         let fixed = vec![
             0.0,
@@ -271,7 +260,6 @@ mod tests {
         for format in [PcmFormat::I32, PcmFormat::I24, PcmFormat::I16] {
             let samples = [2.0_f32, -2.0, f32::NAN, f32::INFINITY, f32::NEG_INFINITY];
             write(&samples, format, &mut out);
-            // 极值与 NaN 都只能落在合法区间里，绝不能因回绕翻符号
             let decoded: Vec<i64> = (0..samples.len())
                 .map(|index| value_at(&out, index, format))
                 .collect();
@@ -295,7 +283,6 @@ mod tests {
         }
     }
 
-    /// 零拷贝视图必须与逐样本写出完全一致，否则「省掉转换」就变成了「换了个结果」。
     #[test]
     fn the_zero_copy_view_matches_the_sample_by_sample_path() {
         for samples in probes() {
@@ -306,8 +293,7 @@ mod tests {
         assert!(f32_as_bytes(&[]).is_empty());
     }
 
-    /// SIMD 内核必须与标量基准一致到 1 LSB 以内 —— 差在四舍五入（就近取偶 vs 就近取远）
-    /// 与半整数上，幅度不超过一个最低位。
+    /// 容差 1 LSB：SIMD 就近取偶、标量就近取远，差只出现在半整数上。
     #[test]
     fn simd_kernels_agree_with_the_scalar_reference() {
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]

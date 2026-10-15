@@ -24,7 +24,6 @@ pub struct IconButton {
 type ClickHandler = Box<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static>;
 
 impl IconButton {
-    /// 默认：32px 方框、16px 图标、`text_muted` 起、悬停变 `text`、全圆角。
     pub fn new(id: impl Into<ElementId>, glyph: Glyph) -> Self {
         Self {
             id: id.into(),
@@ -78,7 +77,7 @@ impl IconButton {
         self
     }
 
-    /// 返回带 id 的元素：既是普通按钮，也能直接当作下拉菜单的触发器（见 [`crate::common::menu::dropdown`]）。
+    /// 返回带 id 的元素，可直接当下拉菜单的触发器（见 [`crate::common::menu::dropdown`]）。
     pub fn render(self) -> Stateful<Div> {
         let IconButton {
             id,
@@ -121,8 +120,8 @@ impl IconButton {
                 element = element.on_click(handler);
             }
         } else {
-            // 禁用态不给 Tab 停靠点：Tab 到一个按下去没反应的控件比没有它更糟。
-            // 光标也要显式给默认箭头 —— 否则它沿用指针形状，看着仍像可点。
+            // 禁用态不进 Tab 序列。
+            // 光标要显式设成默认箭头 —— 否则沿用指针形状，看着仍像可点。
             element = element.cursor_default();
         }
 
@@ -140,7 +139,7 @@ impl IconButton {
     }
 }
 
-/// Tab 序列里的位置。所有控件都用 0（按文档顺序走），只有真的需要插队时才另给值。
+/// Tab 序列里的位置。所有控件都用 0（按文档顺序走）。
 pub const TAB_STOP: isize = 0;
 
 /// 按钮的几何规格：尺寸与字级只有这一个来源。
@@ -148,7 +147,6 @@ pub const BTN_PX: f32 = theme::GAP_LG;
 pub const BTN_PY: f32 = theme::GAP_SM;
 pub const BTN_FONT: f32 = theme::FONT_BODY;
 
-/// 文字按钮的四种规格。
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum ButtonKind {
     /// 实心强调色，一屏最多一个（主行动）
@@ -192,8 +190,7 @@ impl ButtonKind {
                 theme::border(),
                 theme::text(),
             ),
-            // Ghost 与 Outline 的配色完全一致：两者的差别只在描边，那由
-            // `pad_y` / `frame_height` 处理，与颜色无关。
+            // Ghost 与 Outline 的差别只在描边（由 `pad_y` / `frame_height` 处理），颜色完全一致。
             Self::Ghost | Self::Outline => (
                 theme::transparent(),
                 theme::text_muted(),
@@ -204,7 +201,7 @@ impl ButtonKind {
     }
 }
 
-/// 按钮外壳：胶囊、内边距、字级、悬停反馈；内容由调用方 `.child(...)` 补，行为由 `.on_click(...)` 绑定。
+/// 按钮外壳：胶囊、内边距、字级、悬停反馈；内容用 `.child`、行为用 `.on_click` 补。
 pub fn button_shell(id: impl Into<ElementId>, kind: ButtonKind) -> Stateful<Div> {
     let (base_bg, base_color, hover_bg, hover_color) = kind.colors();
 
@@ -216,14 +213,12 @@ pub fn button_shell(id: impl Into<ElementId>, kind: ButtonKind) -> Stateful<Div>
         .gap(px(theme::GAP_XS))
         .px(px(BTN_PX))
         .py(px(kind.pad_y()))
-        // 圆角固定取胶囊值，不按尺寸派生
         .rounded(px(theme::RADIUS_PILL))
         .text_size(px(BTN_FONT))
         .font_weight(theme::WEIGHT_BUTTON)
         .text_color(base_color)
         .bg(base_bg)
         .cursor_pointer()
-        // 与 `IconButton` 同一套键盘约定：进 Tab 序列、聚焦时画环、Enter / Space 由 gpui 转 click。
         .tab_index(TAB_STOP)
         .focus_visible(theme::focus_ring)
         .role(Role::Button)
@@ -236,7 +231,6 @@ pub fn button_shell(id: impl Into<ElementId>, kind: ButtonKind) -> Stateful<Div>
     }
 }
 
-/// 胶囊选中态的两档配色：选中白底黑字、未选灰底灰字。
 pub fn chip_colors(active: bool) -> (Rgba, Rgba) {
     if active {
         (theme::control(), theme::text_on_control())
@@ -268,7 +262,7 @@ pub fn toggle_chip(
         .rounded(px(theme::RADIUS_PILL))
         .tab_index(TAB_STOP)
         .focus_visible(theme::focus_ring)
-        // 开关按钮：`active` 时除了配色还向读屏报「已按下」，不靠颜色单通道。
+        // `active` 时除配色外还用 `aria_selected` 向读屏报「已按下」。
         .role(Role::Button)
         .aria_selected(active)
         .bg(base_bg)
@@ -279,7 +273,7 @@ pub fn toggle_chip(
         })
         .text_size(px(theme::FONT_CAPTION))
         .font_weight(theme::WEIGHT_BUTTON)
-        // 图标跟随父级 `text_color`（[`icon_inherit`] 的语义），不用再单独设色。
+        // 图标跟随父级 `text_color`（[`icon_inherit`]）。
         .child(icon_inherit(glyph, 14.))
         .child(div().min_w_0().truncate().child(label))
 }

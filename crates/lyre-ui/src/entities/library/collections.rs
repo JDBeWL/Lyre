@@ -24,7 +24,7 @@ pub struct CollectionSummary {
 /// 认得的图片扩展名，只决定拷贝时保留哪个后缀；能否解码由图片库判定。
 const IMAGE_EXTENSIONS: [&str; 6] = ["png", "jpg", "jpeg", "webp", "gif", "bmp"];
 
-/// FNV-1a，与 [`lyre_core::TrackId`] 同一套算法：只当文件名用，稳定即可。
+/// FNV-1a：只当文件名用，稳定即可。
 fn fnv1a(bytes: &[u8]) -> u64 {
     let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
     for byte in bytes {
@@ -238,12 +238,11 @@ impl LibraryEntity {
         Some((list.name.clone(), list.tracks.clone()))
     }
 
-    /// 某个歌单当前能解析出曲目的成员数，侧栏显示的是这个而不是 `len()`。
+    /// 某个歌单当前能解析出曲目的成员数。
     pub fn collection_len(&self, id: CollectionId) -> usize {
         self.collection_summary(id).count
     }
 
-    /// 歌单当前封面的路径（数据目录里的那份拷贝）。
     pub fn collection_cover(&self, id: CollectionId) -> Option<PathBuf> {
         self.collections.get(id)?.cover.clone()
     }
@@ -357,7 +356,6 @@ mod tests {
         assert_eq!(reorder_target(3, 1), 1);
     }
 
-    /// 拖放的承诺只有一条：被拖的那行紧贴着瞄准的那行。
     #[test]
     fn a_drop_lands_next_to_the_row_you_aimed_at() {
         use lyre_core::{Collection, CollectionId, TrackId};

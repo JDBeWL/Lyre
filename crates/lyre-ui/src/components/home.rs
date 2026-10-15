@@ -27,7 +27,6 @@ use entries::entry_card;
 use sections::{grid_columns_in, horizontal_section, list_section, recent_card, section_title};
 
 const PAD: f32 = theme::GAP_LG;
-/// 快捷网格最多几张。
 const RECENT_MAX: usize = 8;
 const SECTION_MAX: usize = 12;
 
@@ -280,7 +279,6 @@ mod tests {
     use crate::shell::{ShellEntity, SidebarState};
     use crate::theme;
 
-    /// 回归：写死 4 列时，刚进 Wide 断点（1180px，右面板展开吃掉 320px）第 4 张卡只露 60px，会被 `overflow_hidden` 切掉
     #[test]
     fn recent_grid_never_wider_than_the_room_it_has() {
         for width in [560.0, 860.0, 1180.0, 1600.0, 2560.0] {

@@ -1,8 +1,5 @@
 //! 把解码链重采样到独占输出协商到的采样率。
-//!
-//! 只在两者不一致时才用得上：格式协商会优先要声源自己的采样率，对上了就是位完美直出，
-//! 这一步整个省掉。不一致时用 rubato 的 windowed-sinc（BlackmanHarris2），
-//! 比线性插值在 44.1k ↔ 48k 这类常用换算上干净得多 —— 而这正是独占模式唯一在意的地方。
+//! 只在两者不一致时用到：格式协商优先要声源自己的采样率，对上了就是位完美直出，这一步整个省掉。
 
 use std::time::Duration;
 
@@ -16,14 +13,14 @@ use rubato::{
 
 use crate::error::{ExclusiveError, Result};
 
-/// 滤波器长度。256 是 rubato 建议的起点，兼顾高频滚降与 CPU。
+/// 滤波器长度，256 是 rubato 建议的起点。
 const SINC_LEN: usize = 256;
 /// 保留到奈奎斯特的 92.5%，给抗镜像留一点过渡带。
 const CUTOFF: f32 = 0.925;
-/// 中间点数量：越多越省 CPU 缓存，128 是常用档。
+/// 插值中间点数量，128 是常用档。
 const OVERSAMPLING: usize = 128;
 
-/// 每次递交的输入块长度（帧）。约 21ms @48k，与参考实现的取值一致。
+/// 每次递交的输入块长度（帧），约 21ms @48k。
 /// 源耗尽之后多喂几块静音（块数由重采样器的延迟算出来，见 [`RubatoResampleSource::new`]）。
 const fn chunk_frames(sample_rate: u32) -> usize {
     match sample_rate {
@@ -92,9 +89,8 @@ impl<S: Source<Item = f32>> RubatoResampleSource<S> {
         .map_err(|err| ExclusiveError::Resampler(err.to_string()))?;
 
         let output_frames = resampler.output_frames_max();
-        // 这个重采样器有固定的启动延迟：喂进去的头几块只会填缓冲，一个输出帧都不吐。
-        // 延迟按输出帧计，换算回输入帧再折成块数 —— 少喂了就会把曲尾切掉，
-        // 多喂几块只是让滤波器对着静音空转（输出会由 total_frames 截断，不会多交出去）。
+        // 重采样器有固定启动延迟：头几块只填缓冲、不吐输出帧。延迟按输出帧计，折回输入帧算块数。
+        // 少喂会把曲尾切掉；多喂的静音由 `total_frames` 截断，不会多交出去。
         let flush_chunks = {
             let latency_frames = (resampler.output_delay() as f64 / ratio).ceil() as usize;
             latency_frames.div_ceil(frames_per_chunk) + 1
@@ -236,7 +232,7 @@ mod tests {
     use std::f32::consts::TAU;
     use std::num::NonZero;
 
-    /// 定长正弦源，用来验重采样后的长度与幅度。
+    /// 定长正弦源。
     struct Tone {
         left: usize,
         channels: usize,
@@ -310,7 +306,6 @@ mod tests {
         let expected = FRAMES * 2 * 6;
         assert_eq!(out.len(), expected, "6 倍上采样的样本数不对");
 
-        // 幅度必须保住：0.5 的正弦重采样后峰值仍在 0.5 附近
         let peak = out.iter().fold(0.0_f32, |acc, s| acc.max(s.abs()));
         assert!((0.4..0.55).contains(&peak), "峰值 {peak} 偏离了原始的 0.5");
         assert!(out.iter().all(|s| s.is_finite()), "不该出现 NaN / 无穷");

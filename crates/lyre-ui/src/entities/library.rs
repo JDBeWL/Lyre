@@ -1,4 +1,4 @@
-//! 曲库实体：播放列表、队列顺序、作用域与导入流程，实现按主题分散在本目录的子模块里。
+//! 曲库实体：播放列表、队列顺序、作用域与导入流程。
 //! 曲目集合变了要走三件套：`persist` + `invalidate` + `recompute_visible`。
 
 use lyre_core::{
@@ -28,15 +28,15 @@ pub use scope::{FAVORITES_NAME, Scope, ScopeKind};
 pub enum LibraryEvent {
     /// 该开始播这一首了
     Play(Track),
-    /// 键盘光标移到了第 `usize` 行。滚动是副作用，不能放在 render 里做，所以用事件推到明确时机。
+    /// 键盘光标移到了第 `usize` 行。滚动是副作用，不能放在 render 里做，只能用事件推到明确时机。
     FocusMoved(usize),
     /// 关注状态变了。详情页头图由 `RootView` 内联渲染、不 observe 实体，只能靠这个事件推重绘。
     FollowChanged,
-    /// 作用域真的换了，`set_scope` 是唯一发出者（值没变就不发）；入口有十来个，歌词遮罩只挂它。
+    /// 作用域真的换了才发：`set_scope` 是唯一发出者，值没变不发；歌词遮罩只监听它。
     ScopeChanged,
-    /// 一次导入扫完了。`scanned` 是扫到的首数，`added` 是其中新入库的；重导只刷新标签，所以 `added` 为 0 也可能是「都已在库」。
+    /// 一次导入扫完了。`scanned` 是扫到的首数，`added` 是新入库的；重导只刷新标签，added 可为 0。
     Imported { scanned: usize, added: usize },
-    /// 导入链路上某一步失败了（打开对话框、起扫描线程）。
+    /// 一次操作没能完成，附带的文案直接给用户看（底部提示）。
     Failed(String),
 }
 
@@ -45,9 +45,9 @@ pub struct LibraryEntity {
     /// 键盘光标：`↑↓` 移动、`Enter` 才播。默认跟着播放走（`follow_playback`）。
     /// 不变量：要么 `None`，要么在可见行里，由 `recompute_visible` 维持。
     focus: Option<TrackId>,
-    /// 光标底色该不该画。光标值一直在（`Enter` / `Delete` 要它），底色只在键盘真的动过之后才画。
+    /// 底色该不该画：光标值一直在（`Enter` / `Delete` 要它），底色只在键盘真的动过之后才画。
     cursor_visible: bool,
-    /// 实际装进播放器的那一首，不等于 `playlist.current_id()`（后者导入完就指向第一首）；列表「播放中」以它为准。
+    /// 实际装进播放器的那一首，不等于 `playlist.current_id()`（后者导入完就指向第一首）。
     now_playing: Option<TrackId>,
     query: String,
     /// 可见曲目在 `playlist.tracks()` 里的下标；`None` = 无过滤，不建恒等索引表。

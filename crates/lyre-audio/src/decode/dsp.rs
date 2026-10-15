@@ -1,7 +1,5 @@
 //! 声道布局与下混。系数取 ITU-R BS.775-1。
-//!
-//! LFE 默认不并入立体声（BS.775-1 的取舍），例外是 2.1：那一路没有别的去处，
-//! 丢掉就真没了，所以折进来并按录音时被抬高的 10 dB 折算回来。
+//! LFE 默认不并入立体声；例外是 2.1：那一路没有别的去处，折入并按录音时被抬高的 10 dB 折算回来。
 
 /// 声道在布局里的角色。`Unknown` 只出现在已知布局之外的尾部。
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -81,7 +79,6 @@ impl ChannelLayout {
     }
 }
 
-/// LFE 折入全频段声道的参数。
 #[derive(Clone, Copy, Debug)]
 pub struct LfeConfig {
     /// 5.1 / 7.1 下混成立体声时是否也折入 LFE。默认关，沿用 ITU-R BS.775-1。
@@ -140,7 +137,6 @@ pub(crate) fn convert_frame(
         return;
     }
 
-    // 单声道没有左右可分，复制到前置两路
     if src.len() == 1 {
         dst[0] = src[0];
         if dst.len() > 1 {
@@ -270,7 +266,6 @@ mod tests {
         (a - b).abs() < 1e-5
     }
 
-    /// 单一帧的转换结果
     fn convert(src: &[f32], dst_channels: usize) -> Vec<f32> {
         let mut dst = vec![0.0; dst_channels];
         convert_frame(src, &mut dst, None, LfeConfig::default());
@@ -415,7 +410,6 @@ mod tests {
         assert_eq!(soft_clip(100.0), 1.0);
         assert_eq!(soft_clip(-100.0), -1.0);
 
-        // 符号保持
         for x in [0.96_f32, 1.5, 100.0] {
             assert_eq!(soft_clip(-x).to_bits(), (-soft_clip(x)).to_bits());
         }
@@ -423,7 +417,6 @@ mod tests {
 
     #[test]
     fn lfe_low_pass_keeps_state_across_frames() {
-        // 5.1 的 LFE 折入：低通让第一帧拿不到全部，第二帧才跟上来
         let config = LfeConfig {
             include_lfe: true,
             gain: 1.0,

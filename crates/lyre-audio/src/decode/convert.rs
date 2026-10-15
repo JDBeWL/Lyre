@@ -1,7 +1,5 @@
 //! 重采样之后的声道布局转换。
-//!
-//! 放在 `Source` 层而不是解码器里：LFE 低通要跨帧保留状态，解码器只能看到一个个数据包，
-//! 每个包边界都重启滤波器会听出来。
+//! 放在 `Source` 层而不是解码器里 —— LFE 低通的状态要跨帧，包边界重启滤波器会听出来。
 
 use std::time::Duration;
 
@@ -97,7 +95,6 @@ mod tests {
     use super::*;
     use std::num::NonZero;
 
-    /// 固定声道数与采样率的定长音源
     struct Frame {
         samples: Vec<f32>,
         channels: u16,

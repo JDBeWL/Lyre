@@ -1,5 +1,4 @@
 //! 根视图上的动作：一次用户意图落到多个实体上，这里不持有状态。
-//! 破坏性操作的撤销入口收敛在这里。
 
 use std::time::Duration;
 
@@ -8,8 +7,8 @@ use crate::platform::*;
 
 use super::RootView;
 
-/// 键盘焦点是否落在可 Tab 到的控件上 —— gpui 内建会把 Enter / Space 转成聚焦控件自己的 `on_click`，这两个键又绑着播放动作。
-/// 还要「上一次输入是键盘」：鼠标点过按钮同样留下焦点，那时不该抢走 Space。
+/// 键盘焦点是否落在可 Tab 到的控件上。gpui 内建会把 Enter / Space 转成聚焦控件自己的 `on_click`，
+/// 而这两个键绑着播放动作；鼠标点过按钮同样留下焦点，所以还要「上一次输入是键盘」。
 pub(super) fn control_has_focus(window: &Window, cx: &App) -> bool {
     window.last_input_was_keyboard() && window.focused(cx).is_some_and(|handle| handle.tab_stop)
 }
@@ -35,11 +34,9 @@ impl RootView {
             return;
         }
 
-        // 没有键盘光标时先落到第一首，否则 play_focused 无事可做
-        if self.library.read(cx).focus().is_none() {
-            self.library.update(cx, LibraryEntity::focus_first);
-        }
-        self.library.update(cx, LibraryEntity::play_focused);
+        // 什么都没装载时不能走「光标那一首」：光标完全可能停在一首引擎播不了的曲目上
+        // （列表里它们照常显示、置灰），那时按空格只该得到一条提示。
+        self.library.update(cx, LibraryEntity::play_first_playable);
     }
 
     /// 队列推进时同步 `now_playing`，否则高亮停在上一首。
@@ -94,7 +91,7 @@ impl RootView {
             toast.show_undo(
                 format!("已从曲库移除《{title}》"),
                 move |_window, cx| {
-                    // 撤销只动曲库，正在播的音频不受影响
+                    // 撤销只动曲库，正在播的音频不受影响。
                     library.update(cx, |library, cx| library.restore(&track, index, cx));
                 },
                 cx,

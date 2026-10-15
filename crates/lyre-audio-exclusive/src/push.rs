@@ -1,12 +1,9 @@
-//! 解码推送线程：把播放链路的输出灌进采样环。
-//!
-//! 这不是实时线程，可以用带节奏的取数：水位高就等着渲染线程消费，而不是把静音直接灌进环充数。
-//!
-//! 只有「源真的读完了」才置 `done`。取消（切歌、停流、换设备）不算播完 ——
-//! 否则被取消的旧线程会在新的一首刚开始时把「整首放完」报上去，界面当场跳下一首。
+//! 解码推送线程：把播放链路的输出灌进采样环。不是实时线程，可以按水位有节奏地取数。
+//! 只有「源真的读完了」才置 `done`：取消（切歌、停流、换设备）不算播完 ——
+//! 被取消的旧线程若报「整首放完」，界面会在新的一首刚开始时当场跳下一首。
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
@@ -20,7 +17,6 @@ const GATE_TICK: Duration = Duration::from_millis(20);
 /// 一次搬运的样本数，约 170ms @48k 立体声。
 const CHUNK_SAMPLES: usize = 16_384;
 
-/// 推送线程的句柄。
 pub struct PushThread {
     cancel: Arc<AtomicBool>,
     handle: Option<JoinHandle<()>>,
@@ -46,13 +42,14 @@ impl Drop for PushThread {
     }
 }
 
-/// 起一条推送线程。`done` 由调用方持有并转交渲染线程。
+/// 起一条推送线程。`done` 由调用方持有并转交渲染线程，写进去的是这一代的世代号。
 pub fn spawn<S>(
     mut source: S,
     writer: RingWriter,
     sample_rate: u32,
     channels: u16,
-    done: Arc<AtomicBool>,
+    done: Arc<AtomicU64>,
+    generation: u64,
 ) -> Result<PushThread>
 where
     S: Iterator<Item = f32> + Send + 'static,
@@ -112,7 +109,7 @@ where
             }
 
             if exhausted {
-                done.store(true, Ordering::Release);
+                done.store(generation, Ordering::Release);
             }
         })
         .map_err(ExclusiveError::ThreadSpawn)?;
@@ -128,19 +125,22 @@ mod tests {
     use super::*;
     use crate::ring::SampleRing;
 
-    /// 每个样本都要恰好到达一次，一个不丢、一个不重。
+    /// 用例里统一用第 1 代，方便断言完工标志写进去的是不是这个号。
+    const GENERATION: u64 = 1;
+
     #[test]
     fn every_sample_reaches_the_ring_exactly_once() {
         const TOTAL: usize = 200_000;
 
         let (ring, writer, mut reader) = SampleRing::new();
-        let done = Arc::new(AtomicBool::new(false));
+        let done = Arc::new(AtomicU64::new(0));
         let push = spawn(
             (0..TOTAL).map(|i| i as f32),
             writer,
             48_000,
             2,
             Arc::clone(&done),
+            GENERATION,
         )
         .expect("推送线程应当起得来");
 
@@ -151,7 +151,7 @@ mod tests {
             let got = reader.read(&mut buffer);
             if got == 0 {
                 // 推送结束且环已排空才算真的没了
-                if done.load(Ordering::Acquire) && ring.backlog() == 0 {
+                if done.load(Ordering::Acquire) == GENERATION && ring.backlog() == 0 {
                     break;
                 }
                 idle += 1;
@@ -173,11 +173,10 @@ mod tests {
         );
     }
 
-    /// 取消不等于播完：被取消的线程绝不能把 `done` 置起来。
     #[test]
     fn cancelling_stops_the_thread_without_claiming_completion() {
         let (_ring, writer, _reader) = SampleRing::new();
-        let done = Arc::new(AtomicBool::new(false));
+        let done = Arc::new(AtomicU64::new(0));
 
         // 无穷源：水位一满就会停在门控上，只有取消能叫醒它
         let push = spawn(
@@ -186,41 +185,127 @@ mod tests {
             48_000,
             2,
             Arc::clone(&done),
+            GENERATION,
         )
         .expect("推送线程应当起得来");
 
         thread::sleep(Duration::from_millis(30));
         push.join();
 
-        assert!(!done.load(Ordering::Acquire), "取消不是「播完了」");
+        assert_ne!(
+            done.load(Ordering::Acquire),
+            GENERATION,
+            "取消不是「播完了」"
+        );
     }
 
-    /// 源比一块还短：仍然要写完，并且如实报「读完了」。
     #[test]
     fn a_source_shorter_than_one_chunk_still_completes() {
         let (_ring, writer, mut reader) = SampleRing::new();
-        let done = Arc::new(AtomicBool::new(false));
+        let done = Arc::new(AtomicU64::new(0));
         let push = spawn(
             vec![0.5f32; 100].into_iter(),
             writer,
             48_000,
             2,
             Arc::clone(&done),
+            GENERATION,
         )
         .expect("推送线程应当起得来");
 
         // 先等它自己跑完再 join：join 会先置取消标志，抢在它开跑之前就把完成标志掐掉了
         for _ in 0..200 {
-            if done.load(Ordering::Acquire) {
+            if done.load(Ordering::Acquire) == GENERATION {
                 break;
             }
             thread::sleep(Duration::from_millis(5));
         }
         push.join();
 
-        assert!(done.load(Ordering::Acquire), "读完了就该报完成");
+        assert_eq!(done.load(Ordering::Acquire), GENERATION, "读完了就该报完成");
         let mut out = vec![0.0f32; 100];
         assert_eq!(reader.read(&mut out), 100);
         assert!(out.iter().all(|sample| *sample == 0.5));
+    }
+
+    /// 复刻切歌的真实时序：旧推送线程把环灌满 → 停掉它 → 作废世代 → 起新推送线程 →
+    /// 渲染线程这才第一次读。新曲目的样本必须一个不少地交出来。
+    #[test]
+    fn a_track_swap_hands_the_new_buffer_over_intact() {
+        const OLD: usize = 100_000;
+        const NEW: usize = 40_000;
+
+        let (ring, writer, mut reader) = SampleRing::new();
+        let done_old = Arc::new(AtomicU64::new(0));
+        let old = spawn(
+            std::iter::repeat_n(0.9f32, OLD),
+            writer,
+            48_000,
+            2,
+            Arc::clone(&done_old),
+            GENERATION,
+        )
+        .expect("推送线程应当起得来");
+
+        // 素材比水位短，它一口气写完就收工，不必等门控
+        for _ in 0..200 {
+            if done_old.load(Ordering::Acquire) == GENERATION {
+                break;
+            }
+            thread::sleep(Duration::from_millis(5));
+        }
+        assert_eq!(ring.backlog(), OLD, "旧世代应当已经把环灌满");
+
+        // 控制线程换手：停旧线程 → 作废 → 起新线程
+        old.join();
+        ring.invalidate();
+        let done_new = Arc::new(AtomicU64::new(0));
+        let fresh = spawn(
+            (0..NEW).map(|index| index as f32),
+            SampleRing::writer(&ring),
+            48_000,
+            2,
+            Arc::clone(&done_new),
+            GENERATION + 1,
+        )
+        .expect("推送线程应当起得来");
+
+        // 关键：新推送线程先把环灌起来，渲染线程**才**醒过来读。
+        // 换手时渲染线程不是在等设备事件、就是在空转打盹，先醒来的是推送线程 —— 这就是丢音的那条路。
+        for _ in 0..400 {
+            if done_new.load(Ordering::Acquire) == GENERATION + 1 {
+                break;
+            }
+            thread::sleep(Duration::from_millis(5));
+        }
+        assert_eq!(
+            done_new.load(Ordering::Acquire),
+            GENERATION + 1,
+            "新推送线程应当已经写完"
+        );
+        assert_eq!(
+            ring.backlog(),
+            OLD + NEW,
+            "环里应当同时躺着旧世代的残留与新一代的全部样本"
+        );
+
+        let mut out = vec![0.0f32; NEW];
+        let mut got = 0;
+        for _ in 0..400 {
+            got += reader.read(&mut out[got..]);
+            if got == NEW {
+                break;
+            }
+            thread::sleep(Duration::from_millis(5));
+        }
+        fresh.join();
+
+        assert_eq!(got, NEW, "新曲目的开头顶掉了 {got}/{NEW} 个样本");
+        assert!(
+            out.iter()
+                .enumerate()
+                .all(|(index, sample)| *sample == index as f32),
+            "交出来的样本顺序不对，或掺进了旧世代的残留"
+        );
     }
 }

@@ -33,7 +33,6 @@ pub(super) fn row_thumb(
     }
 
     match entry.id {
-        // 艺术家行画正圆，专辑行画圆角矩形。
         Some(id) => {
             let artist_row = entry.scope == SideScope::Artist;
             let (radius, glyph) = if artist_row {

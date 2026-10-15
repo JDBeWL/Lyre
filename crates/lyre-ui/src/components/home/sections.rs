@@ -99,7 +99,7 @@ pub(super) fn section_title(text: &'static str) -> impl IntoElement {
         .child(section_heading(text))
 }
 
-/// 区块标题的字身。下边距交给带箭头的标题行那一整行，否则同一排里标题和箭头高度不一致。
+/// 区块标题的字身，不带下边距 —— 下边距在带箭头的标题行那一层给，否则同一排里标题和箭头会错位。
 fn section_heading(text: &'static str) -> impl IntoElement {
     div()
         .text_size(px(theme::FONT_TITLE))
@@ -108,7 +108,7 @@ fn section_heading(text: &'static str) -> impl IntoElement {
         .child(text)
 }
 
-/// 一张最近播放卡片：封面 + 专辑名 + 艺术家，点击即从这首开始播；Hover 时封面右下角浮现播放键。
+/// 一张最近播放卡片：封面 + 专辑名 + 艺术家，点击即从这首开始播。
 pub(super) fn recent_card(
     index: usize,
     card: RecentCard,
@@ -156,7 +156,6 @@ pub(super) fn recent_card(
                 id,
                 &play_library,
                 &play_title,
-                // 首页三处横排的卡都是专辑卡
                 NavSection::Albums,
             ),
         ))
@@ -283,7 +282,7 @@ fn row_arrow(
         .into_any_element()
 }
 
-/// 一个横向滚动区块：一排专辑海报卡。滚动交给 gpui 的 `overflow_x_scroll`，不自建滚动容器。
+/// 一个横向滚动区块：一排专辑海报卡。
 pub(super) fn horizontal_section(
     id: &'static str,
     title: &'static str,
@@ -398,7 +397,7 @@ pub(super) fn list_section(
     scroll_row(id, title, row, home, view)
 }
 
-/// 一张歌单卡。与专辑海报卡同尺寸，但点它是收窄作用域并切到曲库页，不是开播，所以不画 hover 播放键。
+/// 一张歌单卡：点它是收窄作用域并切到曲库页，不是开播，所以不画 hover 播放键。
 fn list_card(
     index: usize,
     scope: Scope,
@@ -555,9 +554,7 @@ mod tests {
     /// 容差两侧都要验：太宽会让箭头永远灰不下去，太紧会在还有卡片时就灰掉。
     #[test]
     fn the_end_tolerance_is_half_a_pixel() {
-        // `max_offset` 按 2 位小数取整，加上亚像素滚动，正好到头也能差零点几像素。
         assert!(!RowEdges::of(600.0, -899.7, 900.0).can_go(true));
-        // 差得多就还是「没到头」。
         assert!(RowEdges::of(600.0, -880.0, 900.0).can_go(true));
         assert!(!RowEdges::of(600.0, -0.3, 900.0).can_go(false));
         assert!(RowEdges::of(600.0, -8.0, 900.0).can_go(false));

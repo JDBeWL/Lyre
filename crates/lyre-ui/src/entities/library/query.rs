@@ -123,7 +123,7 @@ impl LibraryEntity {
             if let Some(id) = next {
                 self.set_focus(id, cx);
             }
-            // 系统替用户落的座（换作用域 / 改过滤），不是键盘走出来的 —— 底色不画。
+            // 系统替用户落的座（换作用域 / 改过滤），不是键盘走出来的。
             self.cursor_visible = false;
         }
     }

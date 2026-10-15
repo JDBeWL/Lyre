@@ -19,15 +19,13 @@ const BROWSE_COLS: usize = 4;
 const BROWSE_TILE_H: f32 = 76.0;
 /// 每个分区块最多画几行。
 const BLOCK_MAX: usize = 4;
-/// 最佳结果卡宽度与封面边长。
 const TOP_W: f32 = 320.0;
 const TOP_COVER: f32 = 120.0;
 /// 艺人 / 专辑区块行的封面边长。
 const ROW_THUMB: f32 = 36.0;
 /// 一个分组栏的最小可读宽度：再窄，栏头「艺术家」这五个字本身就要折行。
 const RESULT_COL_MIN_W: f32 = 150.0;
-/// 「最佳结果」与三个分组栏并排所需的最小可用宽度：
-/// `TOP_W` + 一条间距 + 三栏各 `RESULT_COL_MIN_W` + 栏间两条间距 = 842px。
+/// 并排所需最小宽度：`TOP_W` + 一条间距 + 三栏各 `RESULT_COL_MIN_W` + 栏间两条间距 = 842px。
 /// 达不到就让「最佳结果」独占一行。
 const RESULTS_SIDE_BY_SIDE_MIN: f32 =
     TOP_W + theme::GAP_XL + RESULT_COL_MIN_W * 3.0 + theme::GAP_XL * 2.0;
@@ -57,7 +55,6 @@ impl SearchPage {
         }
     }
 
-    /// 未搜索时给引导语而不是「找到 0 / 24 首」—— 后者看起来像搜索坏了。
     fn summary(&self, cx: &App) -> String {
         let library = self.library.read(cx);
         let query = library.query().trim();
@@ -78,7 +75,8 @@ impl Render for SearchPage {
         let searching = crate::entities::searching(&query);
         let summary = self.summary(cx);
 
-        // 主区左上角浮着返回按钮（`root::floating_back`），标题不让开就会被压在下面；让位量与它同源于 `root::HEADER_BACK_INSET`。
+        // 主区左上角浮着返回按钮（`root::floating_back`），标题不让开就会被压在下面；
+        // 让位量与它同源于 `root::HEADER_BACK_INSET`。
         let header_top = if self.shell.read(cx).can_go_back() {
             crate::root::HEADER_BACK_INSET + theme::GAP_MD
         } else {
@@ -247,7 +245,6 @@ impl SearchPage {
             .into_any_element()
     }
 
-    /// 输入中的结果区：左侧最佳结果，右侧艺人 / 专辑 / 歌单分区块。
     fn results_body(&self, query: &str, cx: &mut Context<Self>) -> AnyElement {
         let terms = filter::parse_query(query);
         let (total, artist_total, album_total, list_total, artists, albums, lists, top) =
@@ -280,7 +277,7 @@ impl SearchPage {
                     .take(BLOCK_MAX)
                     .map(|&index| all_albums[index].clone())
                     .collect();
-                // 歌单也按名字匹配。名字先由 `label_for` 问一遍（收藏是虚拟歌单，不在 `Collections` 里但搜得到），命中之后才要头图数据。
+                // 收藏是虚拟歌单，不在 `Collections` 里，匹配要先问 `label_for` 拿名字。
                 let list_matches: Vec<(Scope, HeroInfo)> = library
                     .list_scopes()
                     .into_iter()
@@ -326,7 +323,7 @@ impl SearchPage {
             .map(MiniRow::from_album)
             .collect();
 
-        // 三个分组栏。横向还是纵向撑满取决于下面走哪一支，所以 `flex_1` / `w_full` 留到分支里加。
+        // 分组栏的 `flex_1` / `w_full` 在下面分支里加：横排与竖排的撑满方式不同。
         let groups = div()
             .flex()
             .min_w_0()
@@ -621,8 +618,7 @@ impl SearchPage {
         col.into_any_element()
     }
 
-    /// 区块头：「查看全部」只在匹配数超过展示上限时出现，点了切到对应区段。
-    /// 注意 `AlbumGrid` 目前不读搜索词，切过去是全量网格 —— 这里只保证入口可达，不假装它已过滤。
+    /// `AlbumGrid` 不读搜索词，「查看全部」切过去是全量网格 —— 这里只保证入口可达，不假装已过滤。
     fn block_header(&self, title: &'static str, section: NavSection, total: usize) -> AnyElement {
         let mut row = div()
             .flex_none()
@@ -746,7 +742,6 @@ impl SearchPage {
     }
 }
 
-/// 艺人 / 专辑区块里的一行。
 struct MiniRow {
     id: TrackId,
     name: String,
@@ -797,7 +792,6 @@ fn section_label(section: NavSection) -> &'static str {
     }
 }
 
-/// 行 / 卡片的小封面。取图统一走 [`crate::common::cover::cover_image`]，这里只画那一格。
 fn thumb(
     covers: &Entity<CoverCache>,
     library: &Entity<LibraryEntity>,

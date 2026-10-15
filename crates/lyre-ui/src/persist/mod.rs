@@ -12,7 +12,6 @@ use serde::de::DeserializeOwned;
 
 pub use error::PersistError;
 
-/// 应用目录名。同时用作数据目录名。
 const APP_DIR: &str = "Lyre";
 
 /// 各平台用户数据目录；环境变量缺失时返回 `None`。
@@ -105,7 +104,7 @@ fn render_compact<T: Serialize>(value: &T) -> serde_json::Result<String> {
     serde_json::to_string(value)
 }
 
-/// 删除一个文件（不存在视为成功）。失败只记日志 —— 给「关掉设置项就把上次位置清掉」这类场景用。
+/// 删除一个文件（不存在视为成功）。失败只记日志。
 pub fn remove_lossy(file: &str) {
     let Some(path) = path_of(file) else {
         return;

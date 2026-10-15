@@ -12,8 +12,7 @@ use lyre_core::TrackId;
 
 use crate::platform::*;
 
-/// 缩放档位，即位图长边的像素数。相邻两档只差 1.33 倍，所以任意一档落到实际槽位上，
-/// 剩下的 GPU 缩小比都不超过约 2.2 倍 —— 双线性扛得住的量级。
+/// 缩放档位，即位图长边的像素数。相邻两档差 1.33 倍，任一档落到槽位后 GPU 最多再缩 2.3 倍。
 const BUCKETS: [u32; 7] = [64, 96, 128, 192, 256, 384, 512];
 
 /// 最高档位，也是「没匹配到任何档」时的兜底。
@@ -42,7 +41,7 @@ const DECODE_SLOT_POLL: Duration = Duration::from_millis(20);
 /// 一张位图的身份：封面内容哈希 + 档位。同一张封面的不同档位要各自缓存、各自淘汰。
 type ImageId = (u64, u32);
 
-/// 缓存里的一条位图，连同它占的字节数。字节数在解码时算好存着，淘汰时不必回头问 gpui 要尺寸。
+/// 缓存里的一条位图，连同它占的字节数 —— 字节数在解码时算好存着，淘汰时不必回头问 gpui 要尺寸。
 struct Cached {
     image: Arc<RenderImage>,
     bytes: usize,
@@ -50,7 +49,6 @@ struct Cached {
 
 enum Slot {
     Loading,
-    /// 值是这张位图的身份
     Ready(ImageId),
     /// 确认没有内嵌封面，或解码失败
     Missing,
@@ -67,13 +65,13 @@ enum CoverKey {
 pub struct CoverCache {
     slots: HashMap<CoverKey, Slot>,
     images: HashMap<ImageId, Cached>,
-    /// 每张去重后的图被哪些槽位引用。淘汰时照它精确清槽，不必扫全表。
+    /// 每张去重后的图被哪些槽位引用，淘汰时照它清槽。
     holders: HashMap<ImageId, Vec<CoverKey>>,
     /// LRU 顺序（按位图身份），队首最旧
     order: VecDeque<ImageId>,
     /// `images` 里所有位图的字节数之和，与它同步增减。淘汰判断看这个数。
     bytes: usize,
-    /// 字节预算，默认 [`MAX_BYTES`]；淘汰测试把它调小。
+    /// 字节预算，默认 [`MAX_BYTES`]。
     limit: usize,
 }
 
@@ -106,7 +104,7 @@ impl CoverCache {
         }
     }
 
-    /// 按需加载一个图片文件，走的解码链与 [`Self::request`] 同一条。
+    /// 按需加载一个图片文件。
     pub fn request_file(&mut self, path: PathBuf, size: f32, cx: &mut Context<Self>) {
         let key = CoverKey::File(TrackId::from_path(&path), bucket_for(size));
         if self.slots.contains_key(&key) {
@@ -132,7 +130,7 @@ impl CoverCache {
         )
     }
 
-    /// 按需加载。已缓存或已在加载中时直接返回，所以可以放心地反复调用。
+    /// 按需加载。已缓存或已在加载中时直接返回，可反复调用。
     pub fn request(&mut self, id: TrackId, path: PathBuf, size: f32, cx: &mut Context<Self>) {
         let key = CoverKey::Track(id, bucket_for(size));
         if self.slots.contains_key(&key) {
@@ -145,8 +143,7 @@ impl CoverCache {
         Self::decode_later(key, move || load(&path, bucket), cx);
     }
 
-    /// 两条请求路径共用的后台解码：先排一个解码名额，再丢进线程池。
-    /// 不取 `&self`：结果经 `cx.spawn` 回写到实体上，函数体本身不读视图状态。
+    /// 后台解码：先排一个解码名额，再丢进线程池。
     fn decode_later(
         key: CoverKey,
         decode: impl FnOnce() -> Option<Decoded> + Send + 'static,
@@ -155,13 +152,12 @@ impl CoverCache {
         // App::background_executor() 返回引用，必须 clone 出所有权值才能带进 'static 任务
         let executor = cx.background_executor().clone();
         cx.spawn(async move |this, cx| {
-            // 名额要在上传显存之前释放：解码本身才是要限流的部分
             let slot = DecodeSlot::acquire(&executor).await;
             let decoded = executor.spawn(async move { decode() }).await;
             drop(slot);
             this.update(cx, |cache, cx| {
-                // 淘汰必须一路做到显存：gpui 把每张上传过的图按 `ImageId` 钉在图集里，
-                // 不调 `drop_image` 就永远不释放，图集页只增不减。
+                // 淘汰要一路做到显存：gpui 按 `ImageId` 把上传过的图钉在图集里，
+                // 不调 `drop_image` 就不释放
                 for evicted in cache.store_key(key, decoded) {
                     cx.drop_image(evicted, None);
                 }
@@ -172,8 +168,7 @@ impl CoverCache {
         .detach();
     }
 
-    /// 存一张解码产物，返回被淘汰的位图。
-    /// 归还显存这一步留给调用方：`App::drop_image` 要 `&mut App`。
+    /// 存一张解码产物，返回被淘汰的位图供调用方归还显存 —— `App::drop_image` 要 `&mut App`。
     fn store_key(&mut self, key: CoverKey, decoded: Option<Decoded>) -> Vec<Arc<RenderImage>> {
         let Some((image, frame, bytes)) = decoded else {
             self.slots.insert(key, Slot::Missing);
@@ -227,7 +222,6 @@ impl CoverCache {
     }
 
     /// 丢一张位图，连带清掉指向它的槽位 —— 否则留下「说是 Ready 却取不到图」的悬空引用。
-    /// 走 `holders` 精确清槽，不用 `slots.retain` 扫全表：槽位只增不减。
     fn drop_image(&mut self, image: ImageId) -> Option<Arc<RenderImage>> {
         let cached = self.images.remove(&image)?;
         self.bytes -= cached.bytes;
@@ -310,20 +304,17 @@ fn decode_bgra(bytes: &[u8], bucket: u32) -> Option<(image::Frame, usize)> {
         .ok()?;
     let mut decoder = reader.into_decoder().ok()?;
     let orientation = decoder.orientation().ok()?;
-    // 命名避开 `decoder`：两者只差一个字母，clippy 的 similar_names 会拦。
     let mut full = image::DynamicImage::from_decoder(decoder).ok()?;
 
     // 顺序对齐 gpui：先按 EXIF 转正，再缩到这一档的尺寸
     full.apply_orientation(orientation);
-    // `thumbnail` 是面积型重采样（不是单点抽样），所以它能把源图里的抖动密纹平均掉；
-    // 它也不会放大，小于这一档的图原样返回。
+    // `thumbnail` 是面积型重采样，不会放大：小于这一档的图原样返回。
     let thumbnail = full.thumbnail(bucket, bucket);
 
     let mut bgra = thumbnail.into_rgba8();
     for pixel in bgra.as_chunks_mut::<4>().0 {
         pixel.swap(0, 2);
     }
-    // `as_raw().len()` 就是这张位图的实际占用，与缓存预算同一个数
     let bytes = bgra.as_raw().len();
     Some((image::Frame::new(bgra), bytes))
 }
@@ -353,7 +344,6 @@ mod tests {
         );
     }
 
-    /// 钉住通道序：`RenderImage` 吃 BGRA，喂 RGBA 会得到红蓝对调的色偏。
     #[test]
     fn decoded_cover_is_bgra_not_rgba() {
         use image::GenericImage as _;
@@ -402,7 +392,6 @@ mod tests {
         );
     }
 
-    /// 要 64 就必须真给出 64：500px 原图直接进 44px 槽位时 gpui 没有 mip 链，会碎成色块。
     #[test]
     fn a_500px_cover_actually_shrinks_to_the_requested_tier() {
         let source = image::DynamicImage::new_rgb8(500, 500);
@@ -426,8 +415,6 @@ mod tests {
         }
     }
 
-    /// 档位表的约束：最坏情况的 GPU 缩小比不能超过双线性扛得住的量级。
-    /// 槽位要的是 `size × 1.5`，尺寸刚越过某档就会拿到下一档，于是缩小比 = 1.5 × 相邻档之比。
     #[test]
     fn tiers_keep_the_worst_case_minification_under_2_3x() {
         let mut worst = 0f32;
@@ -440,12 +427,10 @@ mod tests {
             worst <= 2.3,
             "最坏情况要把 {worst:.2} 倍缩小交给没有 mip 链的双线性，会重新出现色块"
         );
-        // 封顶与保底：超出档位表不许撑爆缓存，太小也不许退化成放大
         assert_eq!(super::bucket_for(9999.0), 512);
         assert_eq!(super::bucket_for(1.0), 64);
     }
 
-    /// 界面里真实存在的槽位，逐个钉住落在哪一档。
     #[test]
     fn each_slot_in_the_layout_maps_to_the_expected_tier() {
         for (label, size, tier) in [
@@ -460,7 +445,6 @@ mod tests {
         }
     }
 
-    /// 同一张封面在不同尺寸下必须是两个槽位：共用一格的话，小图会拿到一张大图（或反过来）。
     #[test]
     fn the_same_cover_is_cached_per_tier() {
         let id = lyre_core::TrackId::from_path(std::path::Path::new("x.flac"));
@@ -472,7 +456,6 @@ mod tests {
         assert_ne!(a, b);
     }
 
-    /// 造一份某档位的解码产物，字节数按真实算式算。
     fn decoded(hash: u64, bucket: u32) -> super::Decoded {
         let frame = image::Frame::new(image::RgbaImage::from_pixel(
             bucket,
@@ -493,7 +476,6 @@ mod tests {
 
     #[test]
     fn the_budget_is_measured_in_bytes_not_in_bitmaps() {
-        // 预算 3MB、塞进 5 张 1MB：封顶看字节，不看张数
         let mut cache = super::CoverCache {
             limit: 3 * 1024 * 1024,
             ..Default::default()
@@ -534,7 +516,6 @@ mod tests {
 
     #[test]
     fn one_oversized_bitmap_still_gets_kept() {
-        // 预算比单张还小时，把唯一一张也淘汰就等于「下一帧重新解、再淘汰」的死循环。
         let mut cache = super::CoverCache {
             limit: 1024,
             ..Default::default()

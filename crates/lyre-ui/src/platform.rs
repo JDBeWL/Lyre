@@ -12,7 +12,6 @@ pub use gpui_component::Root;
 /// 图标元素。gpui 把 SVG 渲染成纯 alpha 蒙版、只用 `text_color` 填色，SVG 里的 fill 无效。
 pub use gpui_component::Icon;
 
-/// 给 [`Icon`] 设置尺寸的 trait（`with_size`）。
 pub use gpui_component::Sizable;
 
 /// 文本输入。自带 `key_context("Input")`，根视图上的裸字母快捷键要靠 `&& !Input` 谓词避让，否则搜索框里打「s」会切换播放模式。
@@ -35,7 +34,7 @@ pub use gpui_component::WindowExt;
 pub use gpui_component::Selectable;
 
 /// 滚动条。gpui 自己不画滚动条，虚拟列表只维护偏移量，屏幕上什么都没有。
-/// 组件库这个独立元素要的是 [`ScrollbarHandle`]，两个句柄都实现了它，拖动与点轨道不用自己接。
+/// 组件库这个独立元素要的是 [`ScrollbarHandle`]，两个句柄都实现了它。
 pub use gpui_component::scroll::{Scrollbar, ScrollbarHandle, ScrollbarMode};
 
 pub fn application() -> Application {

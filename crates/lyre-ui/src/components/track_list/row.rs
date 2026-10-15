@@ -100,8 +100,8 @@ impl RowState {
         }
     }
 
-    /// 行首要不要画那道竖条（也就是「键盘光标在哪」）。两个播放态的底色与字色相同，靠它才能分开。
-    /// 竖条做成绝对定位而不是 flex 子元素或 `border`：后两者参与布局，会把整表的列推歪。
+    /// 画不画行首那道竖条（= 键盘光标在哪）：两个播放态的底色与字色相同，只能靠它分开。
+    /// 竖条是绝对定位，不做 flex 子元素或 `border` —— 那两者参与布局，会把整表的列推歪。
     fn shows_cursor_bar(self) -> bool {
         self.is_focused()
     }
@@ -136,11 +136,9 @@ pub(super) fn row(
     cx: &mut App,
 ) -> AnyElement {
     let track_id = track.id;
-    // 行高只从 `env.row_height` 来（`ShellEntity::row_height()` ← `Density::row_height()`）：
-    // `uniform_list` 按它算每一项的位置，这里另算一份就会错位
+    // 行高只从 `env.row_height` 来：`uniform_list` 按它算每一项的位置，这里另算一份就会错位
     let row_height = env.row_height;
     let group: SharedString = format!("track-row-{index}").into();
-    // 收藏状态每帧读一次，是 `O(1)` 集合查找
     let liked = library.read(cx).is_liked(track_id);
 
     let mut element = div()
@@ -196,7 +194,7 @@ pub(super) fn row(
             .into_any_element()
     } else {
         // 序号与悬停播放键重叠在同一格，用 `group_hover` 切换两层透明度。
-        // 不用父级 `hover` + 每行一个 `hovered` 布尔：鼠标每滑过一行就 notify 一次，滚动时等于每秒几十次重绘
+        // 不用父级 `hover` + 每行的 `hovered` 布尔：滑过一行就 notify 一次，滚动时每秒几十次重绘
         let number_color = if state.is_focused() {
             theme::text_muted()
         } else {
@@ -329,6 +327,13 @@ pub(super) fn row(
             ));
     }
 
+    // 引擎解不了的格式照常列出，只是压暗并给出原因（判据见 `lyre_core::UNSUPPORTED_EXTENSIONS`）
+    if let Some(reason) = track.unplayable_reason() {
+        element = element
+            .opacity(theme::UNPLAYABLE_OPACITY)
+            .tooltip(crate::common::tooltip::builder(reason));
+    }
+
     // `context_menu` 返回 `ContextMenu<Div>` 而不是 `Div`，只能放在链式末尾。
     element.context_menu(menu()).into_any_element()
 }
@@ -380,7 +385,6 @@ mod tests {
 
     #[test]
     fn playing_focused_row_shows_the_cursor_bar() {
-        // `shows_cursor_bar` 若改成按播放态判定，光标就会在播放行上消失
         assert_eq!(
             RowState::Playing.background(),
             RowState::PlayingFocused.background()

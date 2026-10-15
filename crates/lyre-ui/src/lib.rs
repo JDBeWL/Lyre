@@ -2,7 +2,6 @@
 //! 高频进度只重绘订阅了 `PlaybackEntity` 的组件，曲目列表与右侧面板不受影响。
 
 pub mod actions;
-/// 与业务无关的可复用基础件。
 /// 歌单落盘（`collections.json`）读写。
 pub mod collections_store;
 pub mod common;

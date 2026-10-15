@@ -158,13 +158,12 @@ impl Render for SettingsPanel {
             output_player.update(cx, |playback, _cx| playback.set_exclusive_output(exclusive));
         });
 
-        // 两列的判断只读 `center_width()`，不在这里减侧栏与右面板。
+        // `center_width()` 已扣掉侧栏与右面板，两列的判断只读它。
         let (two_columns, back_inset) = {
             let shell = self.shell.read(cx);
             let width = shell.center_width();
             (
                 width >= TWO_COL_MIN,
-                // 内容占满一行才需要给浮动返回按钮让位；居中成窄栏时按钮落在左侧留白里
                 shell.can_go_back() && width - 2.0 * theme::GAP_LG <= CONTENT_MAX_W,
             )
         };
@@ -331,7 +330,7 @@ const TWO_COL_MIN: f32 = 760.0;
 /// 整块内容的上限宽度，再宽就居中留白。
 const CONTENT_MAX_W: f32 = 1080.0;
 
-/// 一张设置卡：`surface` 底色、`RADIUS_CARD` 圆角，分区标题在卡内顶部。
+/// 一张设置卡：分区标题在卡内顶部。
 fn card(title: &str) -> Div {
     div()
         .w_full()
@@ -344,7 +343,7 @@ fn card(title: &str) -> Div {
         .child(crate::common::section::section_heading(title))
 }
 
-/// 一列卡片。`flex_1` + `min_w_0`：长路径与长标题不许把某一列顶宽。
+/// `flex_1` + `min_w_0`：长路径与长标题不许把某一列顶宽。
 fn column(cards: Vec<Div>) -> AnyElement {
     cards
         .into_iter()
@@ -360,8 +359,7 @@ fn column(cards: Vec<Div>) -> AnyElement {
         .into_any_element()
 }
 
-/// 页头：大标题靠左、版本号靠右，装在一条与正文同宽的居中栏里（同为 `CONTENT_MAX_W`）。
-/// 标题行顶到返回按钮那一行、与它等高；让位量与按钮位置同源于 `root::BACK_*`。
+/// 让位量与浮动返回按钮的位置同源于 `root::BACK_*`，两处不一致按钮就会压住标题。
 fn header(back_inset: bool) -> impl IntoElement {
     div().flex_none().w_full().flex().justify_center().child(
         div()
@@ -381,7 +379,6 @@ fn header(back_inset: bool) -> impl IntoElement {
             } else {
                 theme::GAP_LG
             }))
-            // 页头的右内边距跟正文一致，版本号才和卡片右缘齐。
             .pr(px(theme::GAP_XL))
             .child(
                 div()
@@ -407,7 +404,6 @@ fn header(back_inset: bool) -> impl IntoElement {
     )
 }
 
-/// 分区里的小标题（快捷键分三组，组名取自 `shortcuts::GROUPS`）。间距交给容器，这里不带 `mt`。
 fn sub_title(text: &str) -> impl IntoElement {
     div()
         .text_size(px(theme::FONT_MICRO))
@@ -446,7 +442,6 @@ fn choice_row(
         .child(segmented(cx, title, options, on_pick))
 }
 
-/// 分段控件：一个深色轨道内并排若干互斥格，选中的那格白底黑字。
 /// 无障碍状态由 `aria_selected` 与提示里的「（已选中）」表达。
 fn segmented(
     cx: &mut Context<SettingsPanel>,
@@ -529,7 +524,6 @@ fn info_row(label: &str, value: impl Into<String>) -> impl IntoElement {
         )
 }
 
-/// 「数据」里的一格统计：大数字压着小标签。
 fn stat_cell(label: &str, value: String) -> Div {
     div()
         .flex_1()
@@ -552,7 +546,7 @@ fn stat_cell(label: &str, value: String) -> Div {
         )
 }
 
-/// 快捷键卡：宽屏三组并排占满整行，窄屏回到一列。默认收起，`open` 由调用方传入。
+/// 快捷键卡：默认收起，`open` 由调用方传入；三组并排还是排一列跟 `two_columns`。
 fn shortcuts_section(two_columns: bool, open: bool, cx: &mut Context<SettingsPanel>) -> Div {
     let chevron = if open {
         Glyph::ChevronDown
@@ -750,12 +744,10 @@ impl SettingsEntity {
         self.update_and_save(cx, |settings| settings.preferred_device = device);
     }
 
-    /// 记住换设备时是否做交叉淡化。
     pub fn set_smooth_device_switch(&mut self, smooth: bool, cx: &mut Context<Self>) {
         self.update_and_save(cx, |settings| settings.smooth_device_switch = smooth);
     }
 
-    /// 记住是否用 WASAPI 独占输出。
     pub fn set_exclusive_output(&mut self, exclusive: bool, cx: &mut Context<Self>) {
         self.update_and_save(cx, |settings| settings.exclusive_output = exclusive);
     }

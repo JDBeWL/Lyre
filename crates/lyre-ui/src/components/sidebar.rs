@@ -1,6 +1,5 @@
 //! 侧边栏：上卡片是首页 / 曲库两个导航项，下卡片列曲库内容。
 //! 下卡片粒度默认跟随主区区段（`entries::listing_for`），可被标题下的胶囊 Chip 覆盖（`listing_override`）。
-//! 图标态放不下带封面的行，退化为单个「库」图标。
 
 use crate::cover::CoverCache;
 use crate::entities::LibraryEntity;

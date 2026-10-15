@@ -58,7 +58,7 @@ impl NowPlaying {
             this.refresh_covers(cx);
         });
 
-        // 关注状态、艺术家统计、下一首都来自曲库；曲库变了要重画（focus / 队列顺序都在这里）。
+        // 关注状态、艺术家统计、下一首都来自曲库；曲库变了要重画。
         let library_sub = cx.observe(&library, |_, _, cx| cx.notify());
 
         let mut this = Self {
@@ -203,7 +203,7 @@ impl Render for NowPlaying {
             None => ("未在播放".to_owned(), String::new()),
         };
 
-        // 头部：封面 + 标题 + 副标题 + 时长。宽度撑满才能截断长标题。
+        // 宽度撑满才能截断长标题。
         let mut hero = div()
             .flex_none()
             .w_full()
@@ -307,7 +307,6 @@ impl Render for NowPlaying {
     }
 }
 
-/// 卡片外壳：面板里三张卡共用一套底色 / 圆角 / 内边距。
 fn card() -> Div {
     div()
         .w_full()
@@ -319,8 +318,7 @@ fn card() -> Div {
         .p(px(theme::GAP_MD))
 }
 
-/// 「关于艺术家」：封面取色底 + 名称 + 派生统计 + 关注。
-/// 底色用 [`theme::hero_tint`]（与详情页头图同一套稳定取色），其上文字一律白色以保 AA。
+/// 「关于艺术家」卡：底色用 [`theme::hero_tint`] 取色，其上文字一律白色以保 AA。
 fn about_artist(
     name: String,
     stats: Option<(usize, usize)>,
@@ -439,7 +437,7 @@ fn credit_row(label: &'static str, value: &str) -> impl IntoElement {
         )
 }
 
-/// 「下一首」预告：小封面 + 标题 + 艺术家，点一下直接跳过去。
+/// 「下一首」预告：点一下直接跳到那一首。
 fn up_next(
     next: &Track,
     covers: &Entity<CoverCache>,

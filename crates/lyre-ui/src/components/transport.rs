@@ -1,5 +1,5 @@
 //! 播放控制栏：上一曲 / 播放暂停 / 下一曲。
-//! 只 `subscribe` 语义事件、不 `observe`：进度每 100ms 变一次，observe 会让三个按钮跟着每秒重绘十次。
+//! 只 `subscribe` 语义事件、不 `observe`：进度每 100ms 变一次，observe 会让按钮每秒重绘十次。
 
 use crate::entities::{PlaybackEntity, PlaybackEvent};
 use crate::icon::{Glyph, icon};
@@ -97,7 +97,7 @@ impl Render for Transport {
                 if enabled {
                     theme::text_on_control()
                 } else {
-                    // 禁用态的图标必须白字：`text_faint` 压在 `track()` 底上只有 3.10:1，达不到 AA。
+                    // 禁用态图标必须白字：`text_faint` 压 `track()` 底上只有 3.10:1，达不到 AA。
                     theme::text()
                 },
             ));

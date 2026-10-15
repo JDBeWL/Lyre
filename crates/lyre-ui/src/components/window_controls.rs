@@ -54,7 +54,7 @@ impl Control {
 
 /// 整个窗口控件组（最小化 / 最大化 / 关闭），最大化态取自 `window.is_maximized()`（GPUI 已缓存平台层状态，不必监听窗口事件）。
 pub fn window_controls(window: &Window) -> impl IntoElement {
-    // macOS 的红绿灯由系统绘制，这里返回空占位以保持顶栏结构一致。
+    // macOS 的红绿灯由系统绘制。
     if cfg!(target_os = "macos") {
         return div().id("window-controls").flex_none();
     }

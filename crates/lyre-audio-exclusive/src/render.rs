@@ -1,10 +1,6 @@
 //! 独占输出的渲染线程：命令处理、事件驱动的样本搬运、音量与淡入淡出。
-//!
-//! 这条线程之外没有任何人碰过 `AudioClient`：COM 对象在哪个线程上建的就只在哪个线程上用，
-//! 控制线程只经命令通道与它打交道。
-//!
-//! 淡入淡出按**挂钟时间**推进，不按已处理的帧数 —— 设备停转时一帧都处理不了，
-//! 按帧计数会让 Stop/Pause 的淡出动作永远走不完，状态就卡在那了。
+//! COM 对象只在创建它的那条线程上使用，控制线程只经命令通道与它打交道。
+//! 淡入淡出按挂钟时间推进 —— 设备停转时按帧计数走不完淡出，Stop/Pause 的状态会卡住。
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -19,7 +15,7 @@ use crate::ring::RingReader;
 
 /// 等待设备事件的最长时间。命令也靠这一拍轮询，所以不能取太长。
 const EVENT_TIMEOUT_MS: u32 = 5;
-/// 没有流可写时的轮询间隔。
+/// 不在播放状态时的轮询间隔。
 const IDLE_SLEEP: Duration = Duration::from_millis(10);
 /// 单轮最多搬运的采样数。约 170ms @48k 立体声，远大于任何设备周期，
 /// 一次分配到位之后循环里不再扩容。
@@ -28,8 +24,12 @@ const MAX_CHUNK_SAMPLES: usize = 16_384;
 pub const FADE: Duration = Duration::from_millis(30);
 /// 欠载日志的最小间隔，避免异常时刷屏。
 const UNDERRUN_REPORT: Duration = Duration::from_secs(1);
-/// 环排空之后再写这么久静音才停流，让设备缓冲里最后那点真实音频播完。
-const DRAIN_LINGER: Duration = Duration::from_millis(60);
+/// 环排空之后再写这么久静音才收尾。备份缓冲只有一个设备周期（几毫秒），
+/// 取一个周期再多一点的余量。
+const DRAIN_LINGER: Duration = Duration::from_millis(20);
+/// 一首放完之后还留着独占流多久。下一首通常几十毫秒后就到，接在同一条流上即可；
+/// 立刻停流的话，下次起播要重新抢占设备、重新锁时钟 —— 独占下那一下听得见。
+const IDLE_GRACE: Duration = Duration::from_secs(1);
 
 /// 送给渲染线程的命令。只有协商需要回执，其余是单向的 —— 通道本身保序。
 #[derive(Clone, Debug)]
@@ -44,6 +44,7 @@ pub enum RenderCommand {
     Stop,
     SetVolume(f32),
     /// 环里残留的样本作废，播放位置归零（切歌、seek）。
+    /// 读取端只在下次读的时候按世代丢掉旧的存量，新写进来的采样照常交付。
     Flush,
     Shutdown,
 }
@@ -63,21 +64,49 @@ pub enum RenderResponse {
 /// 渲染线程与控制线程共享的几个标志。
 #[derive(Clone)]
 pub struct RenderShared {
-    /// 推送线程已把整首写完。
-    pub producer_done: Arc<AtomicBool>,
+    /// 推送线程的世代号。每次换手（`rebuild`）加一，初值 1 表示「还没有任何一代」。
+    producer_epoch: Arc<AtomicU64>,
+    /// 已经写完的那一代。它等于 [`Self::producer_epoch`] 才算「这一代写完了」。
+    /// 换手不作废旧标志：上一代晚到的「写完了」记的是旧号，作不了新一代的数。
+    producer_done_epoch: Arc<AtomicU64>,
     /// 已写进设备的样本数，控制线程据此算播放位置。
     pub written: Arc<AtomicU64>,
     /// 整首自然放完。
     pub finished: Arc<AtomicBool>,
+    /// 累计欠载采样数：环里没货、只能拿静音顶上去的那部分。
+    /// 只在推送线程还没报完工时计 —— 曲尾按 `DRAIN_LINGER` 故意补的静音不算。
+    pub starved: Arc<AtomicU64>,
+    /// 流起播过几次。同一台设备上切歌不该让它涨 —— 涨了就是流被停掉又起了，
+    /// 重新抢占设备与锁时钟在独占下听得见。
+    pub stream_starts: Arc<AtomicU64>,
 }
 
 impl RenderShared {
     pub fn new() -> Self {
         Self {
-            producer_done: Arc::new(AtomicBool::new(false)),
+            producer_epoch: Arc::new(AtomicU64::new(1)),
+            producer_done_epoch: Arc::new(AtomicU64::new(0)),
             written: Arc::new(AtomicU64::new(0)),
             finished: Arc::new(AtomicBool::new(false)),
+            starved: Arc::new(AtomicU64::new(0)),
+            stream_starts: Arc::new(AtomicU64::new(0)),
         }
+    }
+
+    /// 起一代新的推送线程，返回它的世代号。调用方要把它交给 [`crate::push::spawn`]。
+    pub fn begin_producer(&self) -> u64 {
+        self.producer_epoch.fetch_add(1, Ordering::AcqRel) + 1
+    }
+
+    /// 交给推送线程的完工标志；它写进去的是自己那一代的世代号。
+    pub fn done_flag(&self) -> Arc<AtomicU64> {
+        Arc::clone(&self.producer_done_epoch)
+    }
+
+    /// 当前这一代推送线程是否已经把整首写完。
+    pub fn producer_done(&self) -> bool {
+        self.producer_done_epoch.load(Ordering::Acquire)
+            == self.producer_epoch.load(Ordering::Acquire)
     }
 }
 
@@ -88,8 +117,7 @@ impl Default for RenderShared {
 }
 
 /// 渲染线程主体。返回时独占流已经关掉。
-///
-/// 两个通道按值收：线程主体要长期持有它们，改成引用反而要求调用方一直保活。
+/// 两个通道按值收：线程主体要长期持有它们。
 #[allow(clippy::needless_pass_by_value)]
 pub fn run(
     commands: Receiver<RenderCommand>,
@@ -105,6 +133,7 @@ pub fn run(
         fade: Fade::idle(),
         playing: false,
         drain_deadline: None,
+        release_deadline: None,
         shared,
         samples: Vec::with_capacity(MAX_CHUNK_SAMPLES),
         bytes: Vec::with_capacity(MAX_CHUNK_SAMPLES * 4),
@@ -135,6 +164,7 @@ pub fn run(
         } else {
             thread::sleep(IDLE_SLEEP);
         }
+        renderer.release_if_idle();
     }
 
     renderer.shutdown();
@@ -150,6 +180,8 @@ struct Renderer {
     playing: bool,
     /// 环已排空、正在等设备缓冲播完的时刻。
     drain_deadline: Option<Instant>,
+    /// 已上报放完、独占流还留着的截止时刻。到点还没有新曲子就把设备放掉。
+    release_deadline: Option<Instant>,
     shared: RenderShared,
     samples: Vec<f32>,
     bytes: Vec<u8>,
@@ -166,6 +198,7 @@ impl Renderer {
                 // 顺序错了表现为「初始化超时」，而不是什么好懂的报错。
                 self.stop_stream();
                 self.stream = None;
+                self.release_deadline = None;
 
                 let opened = ExclusiveStream::open(device.as_deref(), preferred);
                 let reply = match opened {
@@ -190,25 +223,32 @@ impl Renderer {
             }
 
             RenderCommand::Start => self.start(),
-            RenderCommand::Pause => self.fade.to(0.0, FadeThen::Pause),
-            RenderCommand::Stop => self.fade.to(0.0, FadeThen::Stop),
+            RenderCommand::Pause => {
+                self.release_deadline = None;
+                self.fade.to(0.0, FadeThen::Pause);
+            }
+            RenderCommand::Stop => {
+                self.release_deadline = None;
+                self.fade.to(0.0, FadeThen::Stop);
+            }
             RenderCommand::SetVolume(volume) => self.volume = volume.clamp(0.0, 1.0),
 
             RenderCommand::Flush => {
-                // 环的世代已由控制线程作废，读取端下一次读会自己丢掉残留
                 self.shared.written.store(0, Ordering::SeqCst);
                 self.shared.finished.store(false, Ordering::SeqCst);
-                self.shared.producer_done.store(false, Ordering::SeqCst);
                 self.fade = Fade::idle();
                 self.drain_deadline = None;
+                self.release_deadline = None;
                 self.underrun.reset();
             }
         }
     }
 
     fn start(&mut self) {
+        // 新曲子来了：宽限作废，这一首接在还开着的那条流上（若上一首刚放完，流还没放掉）
+        self.release_deadline = None;
         let Some(stream) = self.stream.as_ref() else {
-            return; // 没协商成功过，没有可播的流
+            return;
         };
         if self.playing {
             return;
@@ -216,10 +256,23 @@ impl Renderer {
         if stream.client.start_stream().is_err() {
             return;
         }
+        self.shared.stream_starts.fetch_add(1, Ordering::Relaxed);
         self.playing = true;
         self.drain_deadline = None;
         // 从当前增益淡入到 1.0（暂停后恢复就从 0 爬起来）
         self.fade.to(1.0, FadeThen::Nothing);
+    }
+
+    /// 放完之后的空转宽限到了：把独占流关掉，别再占着设备。
+    fn release_if_idle(&mut self) {
+        let Some(deadline) = self.release_deadline else {
+            return;
+        };
+        if Instant::now() < deadline {
+            return;
+        }
+        self.release_deadline = None;
+        self.stop_stream();
     }
 
     /// 按挂钟时间推进淡入淡出，走完就执行挂起的动作。
@@ -272,7 +325,14 @@ impl Renderer {
         let filled = self.reader.read(&mut self.samples);
         if filled < needed {
             // 环里暂时没货：剩下的保持静音（欠载），绝不能在这里阻塞实时线程
-            self.underrun.record(needed - filled);
+            let missing = needed - filled;
+            // 曲尾推送线程已经收工，那段静音是故意补的，不算欠载
+            if !self.shared.producer_done() {
+                self.shared
+                    .starved
+                    .fetch_add(missing as u64, Ordering::Relaxed);
+            }
+            self.underrun.record(missing);
         }
 
         let gain = self.volume * self.fade.factor;
@@ -299,16 +359,22 @@ impl Renderer {
             self.stop_stream();
             return;
         }
-        self.shared
-            .written
-            .fetch_add(needed as u64, Ordering::SeqCst);
+        // 只把有效音频算进播放位置：收工后写进去的是撑住设备的静音，
+        // 跟着它跑会让拿不到时长的曲目（Matroska 之类）放完后进度条继续爬。
+        let progress = if self.shared.producer_done() {
+            filled as u64
+        } else {
+            needed as u64
+        };
+        self.shared.written.fetch_add(progress, Ordering::SeqCst);
 
         self.check_drained();
     }
 
-    /// 推送已结束且环已排空：整首放完了，停流并如实上报。
+    /// 推送已结束且环已排空：整首放完了，如实上报，但先别停流 ——
+    /// 宽限到点还没有新曲子，才交给 [`Self::release_if_idle`] 把设备放掉。
     fn check_drained(&mut self) {
-        if !self.shared.producer_done.load(Ordering::Acquire) {
+        if !self.shared.producer_done() {
             return;
         }
         if self.reader.pending() > 0 {
@@ -316,8 +382,7 @@ impl Renderer {
             return;
         }
 
-        // 环空了不代表设备缓冲里那点内容已经播完。`stop_stream` 会把缓冲一起丢掉，
-        // 立刻停会把最后几毫秒真实音频切掉，所以再写一小会儿静音等它走完。
+        // 环空了不代表设备缓冲里那点内容已经播完，再写一小会儿静音等它走完
         let deadline = *self
             .drain_deadline
             .get_or_insert_with(|| Instant::now() + DRAIN_LINGER);
@@ -325,8 +390,10 @@ impl Renderer {
             return;
         }
 
-        self.shared.finished.store(true, Ordering::SeqCst);
-        self.stop_stream();
+        if !self.shared.finished.load(Ordering::Acquire) {
+            self.shared.finished.store(true, Ordering::SeqCst);
+            self.release_deadline = Some(Instant::now() + IDLE_GRACE);
+        }
     }
 
     fn shutdown(&mut self) {
@@ -407,7 +474,7 @@ fn ease(from: f32, target: f32, progress: f32) -> f32 {
     from + (target - from) * progress.clamp(0.0, 1.0)
 }
 
-/// 欠载统计。独占模式下欠载说明推送跟不上，是需要知道的信号，但不能每轮都打日志。
+/// 欠载统计。
 struct Underrun {
     samples: u64,
     since: Instant,
@@ -495,5 +562,28 @@ mod tests {
             assert_eq!(fade.advance(), FadeThen::Nothing);
         }
         assert_eq!(fade.factor, 1.0);
+    }
+
+    /// 完工按世代判定：换手之后上一代的「写完了」不替新一代作数，作废时不必清标志。
+    #[test]
+    fn completion_belongs_to_a_generation_not_to_a_boolean() {
+        let shared = RenderShared::new();
+        assert!(!shared.producer_done(), "还没起过推送线程，谈不上写完");
+
+        let first = shared.begin_producer();
+        assert!(!shared.producer_done(), "刚起的线程还没写完");
+        shared.done_flag().store(first, Ordering::Release);
+        assert!(shared.producer_done(), "它写完就该报完工");
+
+        // 换手：上一代的完工标志不能替新一代作数
+        let second = shared.begin_producer();
+        assert!(!shared.producer_done(), "新一代还没写完，不能算完工");
+
+        // 上一代晚到的「写完了」记的是旧号，也不该把新一代顶成完工
+        shared.done_flag().store(first, Ordering::Release);
+        assert!(!shared.producer_done(), "上一代的完工标志不该替新一代作数");
+
+        shared.done_flag().store(second, Ordering::Release);
+        assert!(shared.producer_done());
     }
 }

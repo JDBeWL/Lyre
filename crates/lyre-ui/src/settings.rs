@@ -6,7 +6,6 @@ use serde::{Deserialize, Serialize};
 use crate::persist;
 use crate::shell::{Density, NavSection, PanelTab, SidebarState};
 
-/// 落盘文件名。
 const FILE: &str = "settings.json";
 
 /// 可持久化的界面偏好。播放模式、进度这类会话内的状态不在这里。
@@ -83,7 +82,6 @@ mod tests {
             settings.recursive_import,
             "递归导入是默认 —— 音乐目录几乎总是分层的"
         );
-        // 启动默认值必须等于「加这些字段之前的行为」
         assert_eq!(settings.default_panel, Some(PanelTab::NowPlaying));
         assert_eq!(settings.default_sidebar, None, "侧栏默认跟随窗口宽度");
         assert!(settings.resume_position, "接着上次播是大多数人想要的");
