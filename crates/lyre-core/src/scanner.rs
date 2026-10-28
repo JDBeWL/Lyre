@@ -135,6 +135,7 @@ pub fn collect_audio_paths_with(inputs: &[PathBuf], recursive: bool) -> Vec<Path
 
 /// 逐首读元数据、按 `chunk` 分批回调，让 UI 先显示前一批。阻塞函数，调用方负责放到后台线程。
 /// 单首失败退化成 [`Track::fallback`]，不中断整批。
+/// 串行是刻意的：机械硬盘上并发读多个文件会互相抢磁头，没有实测数据前不要改成并行。
 pub fn scan_into_tracks<F>(paths: Vec<PathBuf>, chunk: usize, mut on_chunk: F) -> usize
 where
     F: FnMut(Vec<Track>),

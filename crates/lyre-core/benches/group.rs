@@ -46,5 +46,52 @@ fn grouping(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, grouping);
+/// 病态分布：一张合辑里每首都是不同艺术家，组内艺术家去重会走平方路径。
+fn wide_album(tracks: usize) -> Vec<Track> {
+    (0..tracks)
+        .map(|n| Track {
+            id: TrackId::from_path(Path::new(&format!("/music/wide/{n:04}.flac"))),
+            path: format!("/music/wide/{n:04}.flac").into(),
+            title: format!("曲目 {n}"),
+            artist: Some(format!("客串 {n:04}")),
+            album: Some("群星合辑".to_owned()),
+            duration: Some(Duration::from_secs(200)),
+            has_cover: n % 3 == 0,
+            audio: AudioInfo::default(),
+        })
+        .collect()
+}
+
+/// 病态分布：一位艺术家名下上千张专辑，组内专辑去重同样会走平方路径。
+fn many_albums_by_one_artist(albums: usize) -> Vec<Track> {
+    (0..albums)
+        .map(|n| Track {
+            id: TrackId::from_path(Path::new(&format!("/music/deep/{n:04}.flac"))),
+            path: format!("/music/deep/{n:04}.flac").into(),
+            title: format!("曲目 {n}"),
+            artist: Some("陈屿".to_owned()),
+            album: Some(format!("专辑 {n:04}")),
+            duration: Some(Duration::from_secs(200)),
+            has_cover: n % 3 == 0,
+            audio: AudioInfo::default(),
+        })
+        .collect()
+}
+
+fn pathological_shapes(c: &mut Criterion) {
+    let wide = wide_album(2000);
+    let deep = many_albums_by_one_artist(2000);
+
+    let mut group = c.benchmark_group("group_pathological");
+    group.throughput(Throughput::Elements(wide.len() as u64));
+    group.bench_function("wide_album_artists", |b| {
+        b.iter(|| group_by_album(black_box(&wide)));
+    });
+    group.bench_function("many_albums_one_artist", |b| {
+        b.iter(|| group_by_artist(black_box(&deep)));
+    });
+    group.finish();
+}
+
+criterion_group!(benches, grouping, pathological_shapes);
 criterion_main!(benches);

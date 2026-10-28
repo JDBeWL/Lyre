@@ -1,6 +1,7 @@
 //! 按专辑 / 艺术家聚合成分组视图，纯函数 `&[Track] -> Vec<AlbumGroup>`。
 //! 专辑只按专辑名分组，不按 `(专辑名, 艺术家)`：真实曲库里 feat. 会把一张专辑拆成十几张。
 
+use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
@@ -83,6 +84,10 @@ impl ArtistGroup {
     }
 }
 
+/// 组内名字去重从线性扫描切换成哈希集合的阈值。普通专辑/艺术家通常只有一两个名字，
+/// 线性比较比哈希更便宜；合辑、高产艺术家这种成百上千的组才需要换，否则是平方复杂度。
+const LINEAR_DEDUP_LIMIT: usize = 16;
+
 /// 每收到一首曲目要做的三件事（两个分组结构体同构）：累计时长、选出封面代表、收集曲目 id。
 struct Accumulator<'a> {
     tracks: &'a mut Vec<TrackId>,
@@ -148,8 +153,10 @@ impl Accumulate for ArtistGroup {
 /// 按专辑名聚合。结果按专辑名升序，[`UNKNOWN_ALBUM`] 永远在最后。
 pub fn group_by_album(tracks: &[Track]) -> Vec<AlbumGroup> {
     let mut order: Vec<String> = Vec::new();
-    let mut groups: std::collections::HashMap<String, AlbumGroup> =
-        std::collections::HashMap::new();
+    let mut groups: HashMap<String, AlbumGroup> = HashMap::new();
+    // 只在组内名字超过阈值后才建：合辑里艺术家一多，线性去重就退化成平方。
+    // 键与名字都借自 `tracks`，不额外复制；值里的 `String` 只在大组才存在。
+    let mut wide_artists: HashMap<&str, HashSet<String>> = HashMap::new();
 
     for track in tracks {
         let title = album_key(track);
@@ -167,10 +174,18 @@ pub fn group_by_album(tracks: &[Track]) -> Vec<AlbumGroup> {
         });
 
         // 专辑组多记一样东西：组内出现过的艺术家（去重，按首次出现顺序）
-        if let Some(artist) = non_empty(track.artist.as_deref())
-            && !group.artists.iter().any(|a| a == artist)
-        {
-            group.artists.push(artist.to_string());
+        if let Some(artist) = non_empty(track.artist.as_deref()) {
+            if group.artists.len() >= LINEAR_DEDUP_LIMIT {
+                let seen = wide_artists
+                    .entry(title)
+                    .or_insert_with(|| group.artists.iter().cloned().collect());
+                let name = artist.to_string();
+                if seen.insert(name.clone()) {
+                    group.artists.push(name);
+                }
+            } else if !group.artists.iter().any(|existing| existing == artist) {
+                group.artists.push(artist.to_string());
+            }
         }
 
         group.absorb(track);
@@ -190,8 +205,9 @@ pub fn group_by_album(tracks: &[Track]) -> Vec<AlbumGroup> {
 /// 一首合作曲进每一位名家的组（见 [`artist_keys`]），所以各组曲目数之和大于曲库总数。
 pub fn group_by_artist(tracks: &[Track]) -> Vec<ArtistGroup> {
     let mut order: Vec<String> = Vec::new();
-    let mut groups: std::collections::HashMap<String, ArtistGroup> =
-        std::collections::HashMap::new();
+    let mut groups: HashMap<String, ArtistGroup> = HashMap::new();
+    // 同 `group_by_album`：名下专辑超过阈值才建哈希集合。
+    let mut wide_albums: HashMap<&str, HashSet<String>> = HashMap::new();
 
     for track in tracks {
         for name in artist_keys(track) {
@@ -209,10 +225,18 @@ pub fn group_by_artist(tracks: &[Track]) -> Vec<ArtistGroup> {
             });
 
             // 艺术家组多记一样东西：名下出现过的专辑（去重，按首次出现顺序）
-            if let Some(album) = non_empty(track.album.as_deref())
-                && !group.albums.iter().any(|a| a == album)
-            {
-                group.albums.push(album.to_string());
+            if let Some(album) = non_empty(track.album.as_deref()) {
+                if group.albums.len() >= LINEAR_DEDUP_LIMIT {
+                    let seen = wide_albums
+                        .entry(name)
+                        .or_insert_with(|| group.albums.iter().cloned().collect());
+                    let album = album.to_string();
+                    if seen.insert(album.clone()) {
+                        group.albums.push(album);
+                    }
+                } else if !group.albums.iter().any(|existing| existing == album) {
+                    group.albums.push(album.to_string());
+                }
             }
 
             group.absorb(track);

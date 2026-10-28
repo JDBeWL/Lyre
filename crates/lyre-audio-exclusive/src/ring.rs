@@ -11,9 +11,6 @@ use rtrb::{Consumer, Producer, RingBuffer};
 /// 容量必须在协商格式之前定下来（环比设备先建好），所以按上限给；实际水位由推送线程的门控决定。
 pub const RING_SAMPLES: usize = 192_000 * 8 * 2;
 
-/// 丢弃旧世代的残留时的临时缓冲长度。
-const DISCARD_CHUNK: usize = 4096;
-
 pub struct SampleRing {
     producer: Mutex<Producer<f32>>,
     /// 世代号，[`SampleRing::invalidate`] 每调用一次加一。
@@ -152,20 +149,17 @@ impl RingReader {
     }
 
     /// 丢掉 `count` 个样本（不足就只丢环里现有的）。
+    /// 只推进读索引，不把旧样本拷进临时缓冲 —— 这段跑在实时线程上，切歌时可能要丢近两秒的存量。
     fn discard(&mut self, mut count: usize) {
-        let mut scratch = [0.0f32; DISCARD_CHUNK];
         while count > 0 {
-            let take = self.consumer.slots().min(DISCARD_CHUNK).min(count);
+            let take = self.consumer.slots().min(count);
             if take == 0 {
                 return;
             }
-            if self
-                .consumer
-                .pop_entire_slice(&mut scratch[..take])
-                .is_err()
-            {
+            let Ok(chunk) = self.consumer.read_chunk(take) else {
                 return;
-            }
+            };
+            chunk.commit_all();
             count -= take;
         }
     }
@@ -173,6 +167,8 @@ impl RingReader {
 
 #[cfg(test)]
 mod tests {
+    use std::time::{Duration, Instant};
+
     use super::*;
 
     #[test]
@@ -299,5 +295,79 @@ mod tests {
         let mut out = vec![0.0f32; 100];
         reader.read(&mut out);
         assert_eq!(writer.backlog(), 156);
+    }
+
+    /// 作废的存量跨过环尾时也要一次丢干净，且不能误伤新世代写进来的样本。
+    #[test]
+    fn discarding_stale_samples_works_across_the_ring_wrap() {
+        let (ring, writer, mut reader) = SampleRing::new();
+        let block = vec![0.9f32; 4096];
+        let mut left = RING_SAMPLES - 1000;
+        while left > 0 {
+            let take = left.min(block.len());
+            assert_eq!(writer.write(&block[..take]), take);
+            left -= take;
+        }
+
+        ring.invalidate();
+        let fresh = SampleRing::writer(&ring);
+        assert_eq!(fresh.write(&[0.1f32; 500]), 500);
+
+        let mut out = vec![0.0f32; 500];
+        assert_eq!(reader.read(&mut out), 500);
+        assert!(out.iter().all(|sample| *sample == 0.1));
+        assert_eq!(ring.backlog(), 0);
+    }
+
+    /// 塞满环再作废，返回一个一读就会丢掉全部存量的读取端。
+    fn filled_stale_ring() -> (Arc<SampleRing>, RingReader) {
+        let (ring, writer, reader) = SampleRing::new();
+        let block = vec![0.5f32; 65_536];
+        let mut left = RING_SAMPLES;
+        while left > 0 {
+            let take = left.min(block.len());
+            assert_eq!(writer.write(&block[..take]), take);
+            left -= take;
+        }
+        ring.invalidate();
+        (ring, reader)
+    }
+
+    /// 性能基准：切歌时丢弃整环存量，直接推进读索引 vs 逐块拷贝到临时数组。
+    #[test]
+    #[ignore = "性能基准，手动运行"]
+    fn advancing_the_read_index_beats_copying_stale_samples_out() {
+        const ROUNDS: u32 = 20;
+        let mut advanced = Duration::ZERO;
+        let mut copied = Duration::ZERO;
+
+        for _ in 0..ROUNDS {
+            let (_, mut reader) = filled_stale_ring();
+            let start = Instant::now();
+            assert_eq!(reader.read(&mut [0.0f32; 1]), 0);
+            advanced += start.elapsed();
+        }
+
+        for _ in 0..ROUNDS {
+            let (_, mut reader) = filled_stale_ring();
+            let start = Instant::now();
+            let mut scratch = [0.0f32; 4096];
+            let mut left = RING_SAMPLES;
+            while left > 0 {
+                let take = reader.consumer.slots().min(scratch.len()).min(left);
+                if take == 0 {
+                    break;
+                }
+                reader
+                    .consumer
+                    .pop_entire_slice(&mut scratch[..take])
+                    .expect("丢弃样本");
+                left -= take;
+            }
+            assert_eq!(reader.read(&mut [0.0f32; 1]), 0);
+            copied += start.elapsed();
+        }
+
+        println!("丢弃整环 {ROUNDS} 次：直接推进读索引 {advanced:?}，逐块拷贝 {copied:?}");
     }
 }
