@@ -27,7 +27,7 @@ impl Recents {
 
     /// 写回磁盘。失败只记日志，不影响调用方 —— 数据目录只读不该让播放器用不了。
     pub fn save(&self) {
-        persist::save_lossy(FILE, &self.ids);
+        persist::save_lossy(FILE, self.ids.clone());
     }
 
     /// 记一笔：同一首反复播放只挪到最前，不占两格。

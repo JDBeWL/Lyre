@@ -253,6 +253,21 @@ impl PlaybackEntity {
         cx.notify();
     }
 
+    /// 启动续播专用：装载并跳位，但不发 `TrackChanged`。
+    /// 异步加载完成后订阅已经建立，普通 `load` 会在播放实体仍被可变借用时同步回调根视图。
+    pub fn restore(&mut self, track: Track, position: Duration, cx: &mut Context<Self>) {
+        self.error = None;
+        self.state = PlaybackState::Paused;
+        self.duration = track.duration.unwrap_or(Duration::ZERO);
+        self.send(PlayerCommand::Load {
+            path: track.path.clone(),
+            autoplay: false,
+        });
+        self.send(PlayerCommand::Seek(position));
+        self.current = Some(track);
+        cx.notify();
+    }
+
     pub fn toggle_play(&mut self, cx: &mut Context<Self>) {
         self.send(PlayerCommand::TogglePlay);
         // 不做乐观更新：播放 / 暂停以音频线程回来的 State 事件为准

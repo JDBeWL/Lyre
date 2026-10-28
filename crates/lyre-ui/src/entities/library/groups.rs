@@ -43,7 +43,9 @@ impl LibraryEntity {
     pub(super) fn invalidate(&mut self) {
         self.album_groups = None;
         self.artist_groups = None;
+        self.search_fields = None;
         self.groups_generation = self.groups_generation.wrapping_add(1);
+        self.touch_data();
     }
 
     /// 分组缓存的代次，派生视图（网格行、首页区块）用它做缓存键。

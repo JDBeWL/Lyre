@@ -14,7 +14,7 @@ pub fn load() -> Collections {
 }
 
 /// 写回磁盘。失败只记日志 —— 数据目录只读不该让播放器用不了。
-pub fn save(collections: &Collections) {
+pub fn save(collections: Collections) {
     persist::save_lossy(FILE, collections);
 }
 

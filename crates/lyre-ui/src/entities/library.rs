@@ -1,6 +1,9 @@
 //! 曲库实体：播放列表、队列顺序、作用域与导入流程。
 //! 曲目集合变了要走三件套：`persist` + `invalidate` + `recompute_visible`。
 
+use std::collections::HashMap;
+use std::rc::Rc;
+
 use lyre_core::{
     AlbumGroup, ArtistGroup, Collections, PlayMode, Playlist, SortKey, Track, TrackId,
 };
@@ -36,6 +39,8 @@ pub enum LibraryEvent {
     ScopeChanged,
     /// 一次导入扫完了。`scanned` 是扫到的首数，`added` 是新入库的；重导只刷新标签，added 可为 0。
     Imported { scanned: usize, added: usize },
+    /// 启动时的曲库缓存已经读完并合并。续播要等它，才不会在空曲库里把 resume.json 清掉。
+    Loaded,
     /// 一次操作没能完成，附带的文案直接给用户看（底部提示）。
     Failed(String),
 }
@@ -52,6 +57,14 @@ pub struct LibraryEntity {
     query: String,
     /// 可见曲目在 `playlist.tracks()` 里的下标；`None` = 无过滤，不建恒等索引表。
     visible: Option<Vec<usize>>,
+    /// 可见行号的 `TrackId` 反查，仅过滤生效时建立；键盘导航与选择清理靠它做到 O(1)。
+    row_by_id: Option<HashMap<TrackId, usize>>,
+    /// 预先小写化的检索字段，与 `playlist.tracks()` 同序；曲目集合变化时失效。
+    search_fields: Option<Rc<Vec<crate::entities::filter::SearchFields>>>,
+    /// 可见投影的代次。查询、作用域、删歌导致投影重算时加一，派生缓存按它失效。
+    visible_generation: u64,
+    /// 曲目 / 歌单 / 收藏 / 最近播放等数据内容的总代次；首页与搜索页的重型派生按它缓存。
+    data_revision: u64,
     scope: Scope,
     scanning: Option<ScanProgress>,
     /// 分组缓存，`None` 表示需要重算。
@@ -72,6 +85,11 @@ pub struct LibraryEntity {
     collections: Collections,
     /// 最近播放，跨重启
     recents: crate::recents::Recents,
+    /// 首屏还在等后台读 `library.json`。加载期间不落盘，避免把只有新导入项的曲库覆盖回去。
+    loading: bool,
+    /// 首屏加载任务，只写不读：留着它才能在实体销毁时取消。
+    #[allow(dead_code)]
+    load_task: Option<Task<()>>,
     /// 后台扫描任务，只写不读：留着它是为了 Drop 时取消扫描 —— `Task` 一 drop 就中止。
     _scan: Option<Task<()>>,
 }
@@ -80,18 +98,18 @@ impl EventEmitter<LibraryEvent> for LibraryEntity {}
 
 impl LibraryEntity {
     pub fn new(cx: &mut Context<Self>) -> Self {
-        let _ = cx;
-        // 上次导入的曲库直接回来；文件已被移走 / 删掉的条目在 load 里剔掉。
-        let mut playlist = Playlist::new();
-        playlist.push(crate::library_store::load());
-
-        Self {
-            playlist,
+        // 窗口先出来：读盘、解析 JSON 与逐首核对文件都在后台线程做，完成后再合并。
+        let mut this = Self {
+            playlist: Playlist::new(),
             focus: None,
             cursor_visible: false,
             now_playing: None,
             query: String::new(),
             visible: None,
+            row_by_id: None,
+            search_fields: None,
+            visible_generation: 0,
+            data_revision: 0,
             scope: Scope::All,
             scanning: None,
             album_groups: None,
@@ -105,13 +123,55 @@ impl LibraryEntity {
             followed: crate::follows::Follows::load(),
             collections: crate::collections_store::load(),
             recents: crate::recents::Recents::load(),
+            loading: true,
+            load_task: None,
             _scan: None,
+        };
+
+        let executor = cx.background_executor().clone();
+        let load = cx.spawn(async move |this, cx| {
+            let tracks = executor
+                .spawn(async move { crate::library_store::load() })
+                .await;
+            this.update(cx, |this, cx| this.finish_initial_load(tracks, cx))
+                .ok();
+        });
+        this.load_task = Some(load);
+        this
+    }
+
+    /// 首屏曲库是否仍在后台读取。
+    pub fn loading(&self) -> bool {
+        self.loading
+    }
+
+    /// 合并后台读回的曲库。加载期间用户已经导入的曲目排在后面，不丢任何一边。
+    fn finish_initial_load(&mut self, loaded: Vec<lyre_core::Track>, cx: &mut Context<Self>) {
+        if !self.loading {
+            return;
         }
+        let pending: Vec<lyre_core::Track> = self.playlist.tracks().to_vec();
+        let had_pending = !pending.is_empty();
+        self.playlist = merge_tracks(loaded, pending);
+        self.loading = false;
+
+        self.invalidate();
+        self.recompute_visible(cx);
+        if had_pending {
+            // 加载期间用户导入的曲目要补写；没有新导入就不必每次启动都重写整库。
+            self.persist();
+        }
+        cx.emit(LibraryEvent::Loaded);
+        cx.notify();
     }
 
     /// 把曲库按导入顺序写盘。曲目集合变化的每个出口都要调一次；排序与播放模式不落盘。
+    /// 首屏加载完成前不写：这时内存里只有加载期间新导入的几首，写下去会把整库覆盖掉。
     fn persist(&self) {
-        crate::library_store::save(&self.playlist.in_import_order().collect::<Vec<_>>());
+        if self.loading {
+            return;
+        }
+        crate::library_store::save(self.playlist.in_import_order().cloned().collect());
     }
 
     pub fn playlist(&self) -> &Playlist {
@@ -138,5 +198,60 @@ impl LibraryEntity {
 
     pub fn sort_key(&self) -> SortKey {
         self.playlist.sort_key()
+    }
+
+    /// 数据内容代次：曲目、歌单、收藏、最近播放任一变化都会前进。派生缓存用它做键。
+    pub fn data_revision(&self) -> u64 {
+        self.data_revision
+    }
+
+    pub(super) fn touch_data(&mut self) {
+        self.data_revision = self.data_revision.wrapping_add(1);
+    }
+}
+
+/// 后台读回的曲库在前，加载期间新导入的曲目在后；同 id 用新导入的标签覆盖。
+fn merge_tracks(loaded: Vec<Track>, pending: Vec<Track>) -> Playlist {
+    let mut playlist = Playlist::new();
+    playlist.push(loaded);
+    playlist.push(pending);
+    playlist
+}
+
+#[cfg(test)]
+mod tests {
+    // 不写 `use super::*`：`crate::platform::*` 带的 gpui `test` 宏会遮蔽内置 `#[test]`。
+    use std::path::{Path, PathBuf};
+
+    use lyre_core::{Track, TrackId};
+
+    use super::merge_tracks;
+
+    fn track(name: &str, title: &str) -> Track {
+        let path = PathBuf::from(format!("/music/{name}.flac"));
+        let mut track = Track::fallback(&path);
+        track.title = title.to_owned();
+        track
+    }
+
+    #[test]
+    fn loaded_tracks_stay_before_anything_imported_while_loading() {
+        let merged = merge_tracks(
+            vec![track("a", "旧 A"), track("b", "旧 B")],
+            vec![track("c", "新 C")],
+        );
+        let titles: Vec<&str> = merged.tracks().iter().map(|t| t.title.as_str()).collect();
+        assert_eq!(titles, ["旧 A", "旧 B", "新 C"]);
+    }
+
+    #[test]
+    fn a_track_imported_while_loading_refreshes_the_loaded_label() {
+        let merged = merge_tracks(vec![track("a", "旧标题")], vec![track("a", "重导后的标题")]);
+        assert_eq!(merged.len(), 1, "同路径不该变成两首");
+        assert_eq!(merged.tracks()[0].title, "重导后的标题");
+        assert_eq!(
+            merged.tracks()[0].id,
+            TrackId::from_path(Path::new("/music/a.flac"))
+        );
     }
 }

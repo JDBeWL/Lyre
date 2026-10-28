@@ -1,6 +1,9 @@
 //! 根视图只做布局与装配。gpui 的脏标记打到所有祖先：进度通知会连带重绘整棵树（实测约 10% 单核）。
 //! 不 `observe` 播放实体只省掉根视图自己那份重算，高频组件各自订阅 `PlaybackEntity`。
 
+use std::cell::Cell;
+use std::rc::Rc;
+
 use crate::common::toast::ToastEntity;
 use crate::components::{
     AlbumGrid, BottomBar, GridEvent, HomeView, LyricsView, MiniNowPlaying, MiniPlayerEvent,
@@ -139,11 +142,6 @@ impl RootView {
         let top_bar = cx.new(|cx| TopBar::new(shell.clone(), library.clone(), search.clone(), cx));
         let toast = cx.new(ToastEntity::new);
 
-        // 必须在下面的订阅建立之前装回来：`load` 发的 `TrackChanged` 会把 resume.json 抹成 0 秒。
-        if stored.resume_position {
-            resume::restore_resume(&playback, &library, cx);
-        }
-
         let on_playback = cx.subscribe(&playback, |this, _, event: &PlaybackEvent, cx| {
             match event {
                 PlaybackEvent::Finished => {
@@ -198,6 +196,17 @@ impl RootView {
                     let message = message.clone();
                     this.toast
                         .update(cx, |toast, cx| toast.show_plain(message, cx));
+                }
+                // 曲库是后台读完的：拿到曲目后再装回上次播放位置。
+                // 排到本次通知之后，让曲库自己的后续通知先落地。
+                LibraryEvent::Loaded => {
+                    if this.settings.read(cx).settings().resume_position {
+                        let playback = this.playback.clone();
+                        let library = this.library.clone();
+                        cx.defer(move |cx| {
+                            resume::restore_resume(&playback, &library, cx);
+                        });
+                    }
                 }
             }
         });
@@ -307,10 +316,43 @@ impl RootView {
         });
 
         // 正常关窗走这一支：`Alt+F4` 是 WM_CLOSE，最后一个窗口关闭即 quit
-        let on_quit = cx.on_app_quit(move |_window, cx| {
-            resume::save_resume(&watch_playback, &watch_settings, cx);
-            async {}
-        });
+        let quit_flushed = Rc::new(Cell::new(false));
+        let on_quit = {
+            let flushed = Rc::clone(&quit_flushed);
+            cx.on_app_quit(move |_window, cx| {
+                if !flushed.replace(true) {
+                    log::info!("正在退出，刷写持久化队列");
+                    resume::save_resume(&watch_playback, &watch_settings, cx);
+                    // 后台写线程是异步的：关窗前同步等它把最后一格落盘。
+                    crate::persist::flush();
+                    let (writes, bytes) = crate::persist::write_stats();
+                    log::info!("本次运行持久化写入 {writes} 次，共 {bytes} 字节");
+                }
+                async {}
+            })
+        };
+
+        // 这个 gpui 版本关最后一个窗口不一定触发 `on_app_quit`，窗口关闭回调才是可靠兜底。
+        let on_window_closed = {
+            let flushed = Rc::clone(&quit_flushed);
+            let root = cx.entity().downgrade();
+            cx.on_window_closed(move |cx, _| {
+                if flushed.replace(true) {
+                    return;
+                }
+                if root
+                    .update(cx, |this, cx| {
+                        resume::save_resume(&this.playback, &this.settings, cx);
+                    })
+                    .is_err()
+                {
+                    log::warn!("关窗时根视图已销毁，跳过续播位置保存");
+                }
+                crate::persist::flush();
+                let (writes, bytes) = crate::persist::write_stats();
+                log::info!("关窗：本次运行持久化写入 {writes} 次，共 {bytes} 字节");
+            })
+        };
 
         Self {
             playback,
@@ -344,6 +386,7 @@ impl RootView {
                 on_grid,
                 on_search,
                 on_quit,
+                on_window_closed,
             ],
         }
     }

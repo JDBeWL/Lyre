@@ -33,6 +33,13 @@ fn empty_hint(text: impl Into<SharedString>) -> impl IntoElement {
         .child(text.into())
 }
 
+/// 首屏加载中：窗口已经出来，曲库还在后台读盘与核对文件。
+pub(super) fn loading_library() -> impl IntoElement {
+    empty_frame()
+        .child(empty_title("正在读取曲库…"))
+        .child(empty_hint("窗口先显示，曲目会在后台核对完成后出现。"))
+}
+
 /// 空状态：曲库本来就是空的。
 pub(super) fn empty_library(library: Entity<LibraryEntity>) -> impl IntoElement {
     empty_frame()

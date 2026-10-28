@@ -48,11 +48,8 @@ pub(super) fn restore_resume(
     };
     let id = track.id;
     let position = Duration::from_millis(resume.position_ms);
-    playback.update(cx, |playback, cx| {
-        playback.load(track, false, cx);
-        // `Load` 与 `Seek` 排在同一条有序通道上，seek 又是重建式的，装载后立刻跳本来就成立
-        playback.seek(position);
-    });
+    // 静默恢复：订阅此时已经建立，普通 `load` 会在播放实体被可变借用时触发根视图回调。
+    playback.update(cx, |playback, cx| playback.restore(track, position, cx));
     // 列表里那一行要亮起来，否则「界面在放、列表一行都不亮」
     library.update(cx, |library, cx| library.set_now_playing(Some(id), cx));
 }

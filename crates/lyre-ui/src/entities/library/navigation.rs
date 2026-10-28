@@ -21,13 +21,19 @@ impl LibraryEntity {
     /// 移动光标（键盘路径）。发 `FocusMoved` 让列表滚过去 —— 事件带的是可见行号而非曲库
     /// 下标，过滤状态下两者不同。换曲引起的光标移动走 `Self::follow_playback`：那条不发事件。
     pub fn set_focus(&mut self, id: TrackId, cx: &mut Context<Self>) {
+        let row = self.row_of(id);
+        self.set_focus_at(id, row, cx);
+    }
+
+    /// 行号已经知道时直接落座，省掉一次 `row_of` 反查。
+    fn set_focus_at(&mut self, id: TrackId, row: Option<usize>, cx: &mut Context<Self>) {
         // 要放在早返回之前：首行再按 `↑` 落点没变，但用户在用键盘，底色该亮。
         self.cursor_visible = true;
         if self.focus == Some(id) {
             return;
         }
         self.focus = Some(id);
-        if let Some(row) = self.row_of(id) {
+        if let Some(row) = row {
             cx.emit(LibraryEvent::FocusMoved(row));
         }
         cx.notify();
@@ -80,7 +86,7 @@ impl LibraryEntity {
 
         let target = self.track_at_row(next_row).map(|t| t.id);
         if let Some(id) = target {
-            self.set_focus(id, cx);
+            self.set_focus_at(id, Some(next_row), cx);
         }
     }
 
@@ -105,7 +111,7 @@ impl LibraryEntity {
     pub fn focus_first(&mut self, cx: &mut Context<Self>) {
         if let Some(track) = self.track_at_row(0) {
             let id = track.id;
-            self.set_focus(id, cx);
+            self.set_focus_at(id, Some(0), cx);
         }
     }
 
@@ -113,7 +119,7 @@ impl LibraryEntity {
         let last = self.visible_len().saturating_sub(1);
         if let Some(track) = self.track_at_row(last) {
             let id = track.id;
-            self.set_focus(id, cx);
+            self.set_focus_at(id, Some(last), cx);
         }
     }
 

@@ -132,12 +132,12 @@ impl LibraryEntity {
                     .update(cx, |this, cx| {
                         if !batch.is_empty() {
                             // 先数再 `push`：它按值吃掉 `batch`。
-                            scanned += batch.len();
+                            let batch_len = batch.len();
+                            scanned += batch_len;
                             let batch_added = this.playlist.push(batch);
                             added += batch_added;
-                            if batch_added > 0 {
-                                this.invalidate();
-                            }
+                            // 重导只刷新标签时也要失效分组与检索字段缓存，否则搜索还按旧标题匹配。
+                            this.invalidate();
                             if let Some(progress) = this.scanning.as_mut() {
                                 progress.found += batch_added;
                             }

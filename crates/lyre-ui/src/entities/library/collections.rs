@@ -69,6 +69,7 @@ impl LibraryEntity {
         let list = self.collections.create(name)?;
         let id = list.id;
         self.persist_collections();
+        self.touch_data();
         cx.notify();
         Some(id)
     }
@@ -83,6 +84,7 @@ impl LibraryEntity {
         }
         self.recompute_visible(cx);
         self.persist_collections();
+        self.touch_data();
         cx.notify();
         true
     }
@@ -98,6 +100,7 @@ impl LibraryEntity {
             return false;
         }
         self.persist_collections();
+        self.touch_data();
         // 正看着它时面包屑要立刻换名字
         cx.notify();
         true
@@ -117,6 +120,7 @@ impl LibraryEntity {
             return false;
         }
         self.persist_collections();
+        self.touch_data();
         // 正看着这个歌单时新加的那首要立刻出现
         if self.scope == Scope::Collection(id) {
             self.recompute_visible(cx);
@@ -138,6 +142,7 @@ impl LibraryEntity {
             return false;
         }
         self.persist_collections();
+        self.touch_data();
         if self.scope == Scope::Collection(id) {
             self.recompute_visible(cx);
         }
@@ -160,6 +165,7 @@ impl LibraryEntity {
             return 0;
         }
         self.persist_collections();
+        self.touch_data();
         if self.scope == Scope::Collection(id) {
             self.recompute_visible(cx);
         }
@@ -181,6 +187,7 @@ impl LibraryEntity {
             return 0;
         }
         self.persist_collections();
+        self.touch_data();
         if self.scope == Scope::Collection(id) {
             self.recompute_visible(cx);
         }
@@ -215,6 +222,7 @@ impl LibraryEntity {
         // 成员顺序就是行顺序，不重算投影的话界面还停在旧顺序上。
         self.recompute_visible(cx);
         self.persist_collections();
+        self.touch_data();
         cx.notify();
         true
     }
@@ -330,11 +338,12 @@ impl LibraryEntity {
             let _ = fs::remove_file(old);
         }
         self.persist_collections();
+        self.touch_data();
         cx.notify();
     }
 
     fn persist_collections(&self) {
-        crate::collections_store::save(&self.collections);
+        crate::collections_store::save(self.collections.clone());
     }
 }
 

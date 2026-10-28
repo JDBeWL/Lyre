@@ -1,6 +1,8 @@
 //! 右侧面板的「队列」页签：显示真实播放顺序（`Playlist::order`），随机模式下与曲库顺序完全不同。
 //! 这里不参与搜索也不增删曲目，顺序只由播放模式决定。
 
+use std::rc::Rc;
+
 use lyre_core::{PlayMode, Track, TrackId, format_duration};
 
 use crate::common::thousands;
@@ -28,6 +30,10 @@ pub struct QueuePanel {
     // `observe(library)` 在任何曲库变化时都会触发，所以记住上次定位的曲目，
     // 只在正在播放的那首真的换了时才滚动，否则用户翻看队列时会被拽回当前曲。
     last_anchored: Option<TrackId>,
+    /// 缓存的轻量行模型：只存 `TrackId`，曲目数据在可视区里现查。
+    rows: QueueRows,
+    /// 行模型对应的队列代次 / 游标 / 当前曲；任一变化才重建。
+    rows_key: Option<QueueKey>,
 }
 
 impl QueuePanel {
@@ -42,7 +48,35 @@ impl QueuePanel {
             _sub: sub,
             scroll: UniformListScrollHandle::default(),
             last_anchored: None,
+            rows: QueueRows::default(),
+            rows_key: None,
         }
+    }
+
+    /// 队列代次、游标或当前曲变了才重建行模型；每帧几十次的重绘不再全量取曲目。
+    fn sync_rows(&mut self, cx: &mut App) {
+        let key = {
+            let library = self.library.read(cx);
+            QueueKey {
+                revision: library.playlist().revision(),
+                cursor: library.playlist().cursor(),
+                playing: library.now_playing(),
+            }
+        };
+        if self.rows_key == Some(key) {
+            return;
+        }
+
+        let (played, upcoming, current) = {
+            let library = self.library.read(cx);
+            (
+                library.just_played_ids(PLAYED_CONTEXT),
+                library.upcoming_ids(usize::MAX),
+                library.now_playing(),
+            )
+        };
+        self.rows = build_entries(played, upcoming, current);
+        self.rows_key = Some(key);
     }
 
     /// 换曲后把正在播的那一行滚进可视区。
@@ -59,13 +93,8 @@ impl QueuePanel {
 
         // 锚点是正在播的那一行本身，不是 `PLAYED_CONTEXT`：已播那段可能比它短，
         // 分段标签还要再占一行。行号只能由 `build_entries` 给出。
-        let read = library.read(cx);
-        let rows = build_entries(
-            read.just_played(PLAYED_CONTEXT),
-            read.upcoming(usize::MAX),
-            current,
-        );
-        if let Some(row) = rows.current_row {
+        self.sync_rows(cx);
+        if let Some(row) = self.rows.current_row {
             self.scroll.scroll_to_item(row, ScrollStrategy::Nearest);
         }
     }
@@ -73,12 +102,13 @@ impl QueuePanel {
 
 impl Render for QueuePanel {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.sync_rows(cx);
         let library = self.library.read(cx);
         let playing = library.now_playing();
         let mode = library.mode();
-        let played = library.just_played(PLAYED_CONTEXT);
         // 待播段不截断：整条队列都要能滚到，列表本身是虚拟化的，多几行不增加渲染成本。
-        let upcoming = library.upcoming(usize::MAX);
+        // 行模型已经缓存，这里只读一个数字。
+        let ahead = self.rows.ahead;
         // 「共 N 首」说的是队列，不是曲库 —— 有队列时两者不相等（列着 4 首却写 131 首）。
         let total = library.queue_len();
 
@@ -128,30 +158,43 @@ impl Render for QueuePanel {
                 format!(
                     "共 {} 首 · 接下来 {} 首",
                     thousands(total),
-                    thousands(upcoming.len().saturating_sub(1))
+                    thousands(ahead)
                 )
             });
 
-        let rows = build_entries(played, upcoming, playing);
-
-        let row_count = rows.entries().len();
+        let row_count = self.rows.entries().len();
+        let rows = Rc::clone(&self.rows.entries);
         let library_entity = self.library.clone();
 
         let body: AnyElement = if row_count == 0 {
             empty_queue(total)
         } else {
             uniform_list("queue-list", row_count, move |range, _window, cx| {
-                let visible: Vec<QueueEntry> = rows.entries()[range.clone()].to_vec();
-                let library = &library_entity;
+                // 只查可视区那几行，行模型本身只带 id；先拷出曲目再放开曲库读取，
+                // 行元素的回调还要可变借用 `cx`。
+                let visible = rows[range].to_vec();
+                let tracks: Vec<Option<Track>> = {
+                    let library = library_entity.read(cx);
+                    visible
+                        .iter()
+                        .map(|entry| match entry {
+                            QueueEntry::Track { id, .. } => library.playlist().by_id(*id).cloned(),
+                            QueueEntry::Divider(_) => None,
+                        })
+                        .collect()
+                };
                 visible
-                    .into_iter()
-                    .map(|entry| match entry {
-                        QueueEntry::Track {
-                            track,
-                            kind,
-                            number,
-                        } => queue_row(number, &track, kind, library, cx).into_any_element(),
-                        QueueEntry::Divider(label) => section_divider(label).into_any_element(),
+                    .iter()
+                    .zip(tracks)
+                    .filter_map(|(entry, track)| match (entry, track) {
+                        (QueueEntry::Track { kind, number, .. }, Some(track)) => Some(
+                            queue_row(*number, &track, *kind, &library_entity, cx)
+                                .into_any_element(),
+                        ),
+                        (QueueEntry::Divider(label), _) => {
+                            Some(section_divider(label).into_any_element())
+                        }
+                        (QueueEntry::Track { .. }, None) => None,
                     })
                     .collect::<Vec<AnyElement>>()
             })
@@ -190,11 +233,11 @@ impl Render for QueuePanel {
 }
 
 /// 队列列表里的一项：曲目或分段标签。
-#[derive(Clone)]
+#[derive(Clone, Copy)]
 enum QueueEntry {
     /// 一行曲目。`number` 是显示序号，按曲目数而不是行数递增 —— 分段标签占一行但不占号。
     Track {
-        track: Track,
+        id: TrackId,
         kind: RowKind,
         number: usize,
     },
@@ -204,10 +247,14 @@ enum QueueEntry {
 
 /// 队列的行模型：行本身，加上正在播的那一行的下标。滚动锚点只能从这里拿。
 /// 「已播那段有几行」不等于 `PLAYED_CONTEXT`：刚开播时是空的、只往回取 5 首、分段标签还占一行。
+#[derive(Default)]
 struct QueueRows {
-    entries: Vec<QueueEntry>,
+    /// 行模型只存 id：整条队列的 `Track` 每次重绘都 clone 一遍是真正的大头。
+    entries: Rc<Vec<QueueEntry>>,
     /// 正在播的那一行的下标。没有正在播的曲目、或它不在待播区里时为 `None`。
     current_row: Option<usize>,
+    /// 当前曲之后还有几首（不含当前曲），摘要文案用。
+    ahead: usize,
 }
 
 impl QueueRows {
@@ -216,16 +263,29 @@ impl QueueRows {
     }
 }
 
+/// 行模型的缓存键：队列结构 / 游标 / 当前曲任一变化都要重建。
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct QueueKey {
+    revision: u64,
+    cursor: usize,
+    playing: Option<TrackId>,
+}
+
 /// 把「已播 / 待播」两段拼成一条连续队列：标签只在两段都非空时插入，序号按曲目连续、标签不占号。
 /// `upcoming` 第一首只有与 `now_playing` 相同才算 [`RowKind::Current`]。
-fn build_entries(played: Vec<Track>, upcoming: Vec<Track>, current: Option<TrackId>) -> QueueRows {
+fn build_entries(
+    played: Vec<TrackId>,
+    upcoming: Vec<TrackId>,
+    current: Option<TrackId>,
+) -> QueueRows {
     let played_count = played.len();
+    let ahead = upcoming.len().saturating_sub(1);
     let mut rows: Vec<QueueEntry> = Vec::with_capacity(played_count + upcoming.len() + 1);
     let mut number = 1;
 
-    for track in played {
+    for id in played {
         rows.push(QueueEntry::Track {
-            track,
+            id,
             kind: RowKind::Played,
             number,
         });
@@ -234,8 +294,8 @@ fn build_entries(played: Vec<Track>, upcoming: Vec<Track>, current: Option<Track
 
     let mut rest = upcoming.into_iter();
     let mut current_row = None;
-    if let Some(track) = rest.next() {
-        let kind = if current == Some(track.id) {
+    if let Some(id) = rest.next() {
+        let kind = if current == Some(id) {
             RowKind::Current
         } else {
             RowKind::Upcoming
@@ -244,16 +304,12 @@ fn build_entries(played: Vec<Track>, upcoming: Vec<Track>, current: Option<Track
         if kind == RowKind::Current {
             current_row = Some(rows.len());
         }
-        rows.push(QueueEntry::Track {
-            track,
-            kind,
-            number,
-        });
+        rows.push(QueueEntry::Track { id, kind, number });
         number += 1;
     }
-    for track in rest {
+    for id in rest {
         rows.push(QueueEntry::Track {
-            track,
+            id,
             kind: RowKind::Upcoming,
             number,
         });
@@ -275,8 +331,9 @@ fn build_entries(played: Vec<Track>, upcoming: Vec<Track>, current: Option<Track
     }
 
     QueueRows {
-        entries: rows,
+        entries: Rc::new(rows),
         current_row,
+        ahead,
     }
 }
 
@@ -605,20 +662,22 @@ fn title_cell(track: &Track, title_color: Rgba, meta_color: Rgba) -> impl IntoEl
 mod tests {
     // 不用 glob 导入：`platform::*` 里的 gpui `test` 宏会遮蔽内置 `#[test]`，导致无限递归。
     use super::{PLAYED_CONTEXT, QueueEntry, QueueRows, RowKind, build_entries};
-    use lyre_core::Track;
+    use lyre_core::TrackId;
     use std::path::Path;
 
-    fn track(name: &str) -> Track {
-        let mut t = Track::fallback(Path::new(&format!("/music/{name}.mp3")));
-        t.title = name.to_owned();
-        t
+    fn id(name: &str) -> TrackId {
+        TrackId::from_path(Path::new(&format!("/music/{name}.mp3")))
     }
 
-    fn titles(rows: &QueueRows) -> Vec<String> {
+    fn ids(names: &[&str]) -> Vec<TrackId> {
+        names.iter().map(|name| id(name)).collect()
+    }
+
+    fn track_ids(rows: &QueueRows) -> Vec<TrackId> {
         rows.entries()
             .iter()
             .filter_map(|row| match row {
-                QueueEntry::Track { track, .. } => Some(track.title.clone()),
+                QueueEntry::Track { id, .. } => Some(*id),
                 QueueEntry::Divider(_) => None,
             })
             .collect()
@@ -665,13 +724,9 @@ mod tests {
     #[test]
     fn first_upcoming_is_the_current_track() {
         // `upcoming()` 从 cursor 起取，第一首就是光标所在那首；错了整条分界线会偏一首。
-        let rows = build_entries(
-            vec![track("a"), track("b")],
-            vec![track("c"), track("d"), track("e")],
-            Some(track("c").id),
-        );
+        let rows = build_entries(ids(&["a", "b"]), ids(&["c", "d", "e"]), Some(id("c")));
 
-        assert_eq!(titles(&rows), ["a", "b", "c", "d", "e"]);
+        assert_eq!(track_ids(&rows), ids(&["a", "b", "c", "d", "e"]));
         assert_eq!(
             kinds(&rows),
             [
@@ -686,19 +741,15 @@ mod tests {
 
     #[test]
     fn the_cursor_row_is_not_current_until_it_actually_plays() {
-        let rows = build_entries(Vec::new(), vec![track("a"), track("b")], None);
+        let rows = build_entries(Vec::new(), ids(&["a", "b"]), None);
 
         assert_eq!(kinds(&rows), [RowKind::Upcoming, RowKind::Upcoming]);
-        assert_eq!(titles(&rows), ["a", "b"]);
+        assert_eq!(track_ids(&rows), ids(&["a", "b"]));
     }
 
     #[test]
     fn a_different_track_playing_leaves_the_cursor_row_upcoming() {
-        let rows = build_entries(
-            vec![track("a")],
-            vec![track("b"), track("c")],
-            Some(track("a").id),
-        );
+        let rows = build_entries(vec![id("a")], ids(&["b", "c"]), Some(id("a")));
 
         assert_eq!(
             kinds(&rows),
@@ -708,11 +759,7 @@ mod tests {
 
     #[test]
     fn divider_sits_between_played_and_current() {
-        let rows = build_entries(
-            vec![track("a")],
-            vec![track("b"), track("c")],
-            Some(track("b").id),
-        );
+        let rows = build_entries(vec![id("a")], ids(&["b", "c"]), Some(id("b")));
 
         assert_eq!(divider_at(&rows), Some(1));
         assert_eq!(rows.entries().len(), 4, "1 已播 + 1 标签 + 2 曲目");
@@ -720,32 +767,24 @@ mod tests {
 
     #[test]
     fn no_divider_when_nothing_has_played_yet() {
-        let rows = build_entries(
-            Vec::new(),
-            vec![track("a"), track("b")],
-            Some(track("a").id),
-        );
+        let rows = build_entries(Vec::new(), ids(&["a", "b"]), Some(id("a")));
 
         assert_eq!(divider_at(&rows), None);
-        assert_eq!(titles(&rows), ["a", "b"]);
+        assert_eq!(track_ids(&rows), ids(&["a", "b"]));
     }
 
     #[test]
     fn no_divider_when_there_is_nothing_ahead() {
-        let rows = build_entries(
-            vec![track("a"), track("b")],
-            Vec::new(),
-            Some(track("b").id),
-        );
+        let rows = build_entries(ids(&["a", "b"]), Vec::new(), Some(id("b")));
 
         assert_eq!(divider_at(&rows), None);
-        assert_eq!(titles(&rows), ["a", "b"]);
+        assert_eq!(track_ids(&rows), ids(&["a", "b"]));
     }
 
     #[test]
     fn divider_label_follows_playback_state() {
-        let playing = build_entries(vec![track("a")], vec![track("b")], Some(track("b").id));
-        let stopped = build_entries(vec![track("a")], vec![track("b")], None);
+        let playing = build_entries(vec![id("a")], vec![id("b")], Some(id("b")));
+        let stopped = build_entries(vec![id("a")], vec![id("b")], None);
 
         let label = |rows: &QueueRows| match rows.entries().iter().find_map(|r| match r {
             QueueEntry::Divider(l) => Some(*l),
@@ -765,15 +804,18 @@ mod tests {
         let rows = build_entries(Vec::new(), Vec::new(), None);
         assert!(rows.entries().is_empty());
         assert_eq!(rows.current_row, None);
+        assert_eq!(rows.ahead, 0);
+    }
+
+    #[test]
+    fn ahead_counts_only_the_tracks_after_the_current_one() {
+        let rows = build_entries(vec![id("a")], ids(&["b", "c", "d"]), Some(id("b")));
+        assert_eq!(rows.ahead, 2, "当前曲不算「接下来」");
     }
 
     #[test]
     fn track_numbers_stay_contiguous_across_the_divider() {
-        let rows = build_entries(
-            vec![track("a"), track("b"), track("c")],
-            vec![track("d"), track("e")],
-            Some(track("d").id),
-        );
+        let rows = build_entries(ids(&["a", "b", "c"]), ids(&["d", "e"]), Some(id("d")));
 
         assert_eq!(divider_at(&rows), Some(3), "先确认标签确实插在中间");
         assert_eq!(numbers(&rows), [1, 2, 3, 4, 5], "序号必须连续");
@@ -781,11 +823,7 @@ mod tests {
 
     #[test]
     fn track_numbers_start_at_one_without_a_divider() {
-        let rows = build_entries(
-            Vec::new(),
-            vec![track("a"), track("b")],
-            Some(track("a").id),
-        );
+        let rows = build_entries(Vec::new(), ids(&["a", "b"]), Some(id("a")));
         assert_eq!(divider_at(&rows), None);
         assert_eq!(numbers(&rows), [1, 2]);
     }
@@ -794,11 +832,11 @@ mod tests {
     #[test]
     fn the_anchor_is_the_current_row_however_long_the_played_block_is() {
         for played in 0..=PLAYED_CONTEXT {
-            let played_tracks: Vec<Track> = (0..played).map(|i| track(&format!("p{i}"))).collect();
-            let head = track("cur");
-            let upcoming = vec![head.clone(), track("n1"), track("n2")];
+            let played_tracks: Vec<TrackId> = (0..played).map(|i| id(&format!("p{i}"))).collect();
+            let head = id("cur");
+            let upcoming = vec![head, id("n1"), id("n2")];
 
-            let rows = build_entries(played_tracks, upcoming, Some(head.id));
+            let rows = build_entries(played_tracks, upcoming, Some(head));
             assert_eq!(
                 rows.current_row,
                 row_marked_current(&rows),
@@ -810,8 +848,8 @@ mod tests {
     /// 刚开播：已播区是空的，当前就是第 0 行 —— 锚点不能取 `PLAYED_CONTEXT` 那个常数。
     #[test]
     fn a_queue_that_just_started_anchors_on_row_zero() {
-        let head = track("cur");
-        let rows = build_entries(Vec::new(), vec![head.clone(), track("n1")], Some(head.id));
+        let head = id("cur");
+        let rows = build_entries(Vec::new(), vec![head, id("n1")], Some(head));
 
         assert_eq!(divider_at(&rows), None, "没有已播就不该有分段标签");
         assert_eq!(rows.current_row, Some(0));
@@ -820,12 +858,8 @@ mod tests {
     /// 分段标签也占一行，锚点必须把它算进去 —— 少算一行就正好停在前一首上。
     #[test]
     fn the_divider_row_pushes_the_anchor_down_by_one() {
-        let head = track("cur");
-        let rows = build_entries(
-            vec![track("p0")],
-            vec![head.clone(), track("n1")],
-            Some(head.id),
-        );
+        let head = id("cur");
+        let rows = build_entries(vec![id("p0")], vec![head, id("n1")], Some(head));
 
         assert_eq!(divider_at(&rows), Some(1));
         assert_eq!(
@@ -838,7 +872,7 @@ mod tests {
     /// 没在播时下面那段是「待播放」，第一行不算「当前」，没有锚点。
     #[test]
     fn there_is_no_anchor_when_nothing_is_playing() {
-        let rows = build_entries(vec![track("p0")], vec![track("a"), track("b")], None);
+        let rows = build_entries(vec![id("p0")], ids(&["a", "b"]), None);
 
         assert_eq!(row_marked_current(&rows), None);
         assert_eq!(rows.current_row, None);
@@ -847,11 +881,7 @@ mod tests {
     /// 正在播的那首不在待播区里时同样没有锚点，此时一行高亮都没有。
     #[test]
     fn there_is_no_anchor_when_the_playing_track_is_off_the_upcoming_block() {
-        let rows = build_entries(
-            vec![track("p0")],
-            vec![track("a"), track("b")],
-            Some(track("p0").id),
-        );
+        let rows = build_entries(vec![id("p0")], ids(&["a", "b"]), Some(id("p0")));
 
         assert_eq!(rows.current_row, None);
     }

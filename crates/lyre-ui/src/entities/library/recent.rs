@@ -35,6 +35,14 @@ impl LibraryEntity {
 
     /// 当前队列里光标前面那几段，顺序由远及近。不是播放史，首页的「最近播放」走 [`Self::recent_tracks`]。
     pub fn just_played(&self, limit: usize) -> Vec<Track> {
+        self.just_played_ids(limit)
+            .into_iter()
+            .filter_map(|id| self.playlist.by_id(id).cloned())
+            .collect()
+    }
+
+    /// 已播段的 id，口径同 [`Self::just_played`]，但不 clone `Track`。
+    pub fn just_played_ids(&self, limit: usize) -> Vec<TrackId> {
         let position = self.playlist.cursor();
         let start = position.saturating_sub(limit);
         self.playlist
@@ -42,7 +50,8 @@ impl LibraryEntity {
             .iter()
             .skip(start)
             .take(position - start)
-            .filter_map(|id| self.playlist.by_id(*id).cloned())
+            .filter(|id| self.playlist.by_id(**id).is_some())
+            .copied()
             .collect()
     }
 
@@ -53,6 +62,7 @@ impl LibraryEntity {
         // 重播当前这首时列表没变，不该为此重写一遍盘。
         if self.recents != before {
             self.recents.save();
+            self.touch_data();
             cx.notify();
         }
     }

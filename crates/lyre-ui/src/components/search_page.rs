@@ -1,12 +1,13 @@
 //! 搜索页：未输入时画探索网格（从专辑分组派生），输入中画「最佳结果」+「艺人 / 专辑 / 歌单」区块。
 //! 输入框只有顶栏那一份；歌曲结果由 [`crate::components::TrackList`]（曲库可见投影）承载，这里不另建列表。
 
+use std::collections::HashSet;
 use std::rc::Rc;
 
 use lyre_core::{AlbumGroup, ArtistGroup, Track, TrackId};
 
 use crate::components::detail::{HeroInfo, hero_for};
-use crate::cover::CoverCache;
+use crate::cover::{CoverCache, CoverCacheEvent};
 use crate::entities::{LibraryEntity, Scope, filter};
 use crate::icon::{Glyph, icon, icon_inherit};
 use crate::platform::*;
@@ -34,7 +35,35 @@ pub struct SearchPage {
     library: Entity<LibraryEntity>,
     shell: Entity<ShellEntity>,
     covers: Entity<CoverCache>,
+    /// 搜索结果的缓存；查询词、可见投影或曲库数据没变就不重新匹配全部分组。
+    results: Option<SearchCache>,
     _subs: Vec<Subscription>,
+}
+
+#[derive(Clone, PartialEq, Eq)]
+struct SearchKey {
+    query: String,
+    visible_generation: u64,
+    data_revision: u64,
+}
+
+struct SearchCache {
+    key: SearchKey,
+    results: SearchResults,
+    /// 当前结果里会用到封面的 id；封面完成事件据此过滤。
+    cover_ids: HashSet<TrackId>,
+}
+
+/// 一帧搜索结果需要的全部数据，分组只保留要画的前几项。
+struct SearchResults {
+    total: usize,
+    artist_total: usize,
+    album_total: usize,
+    list_total: usize,
+    artists: Vec<ArtistGroup>,
+    albums: Vec<AlbumGroup>,
+    lists: Vec<(Scope, HeroInfo)>,
+    top: Option<Track>,
 }
 
 impl SearchPage {
@@ -45,14 +74,141 @@ impl SearchPage {
         cx: &mut Context<Self>,
     ) -> Self {
         let observe = cx.observe(&library, |_, _, cx| cx.notify());
-        let observe_covers = cx.observe(&covers, |_, _, cx| cx.notify());
+        // 只对当前结果里等的那几张封面重绘：整页 observe 会让每次解码都重算分组与 Hero。
+        let on_cover = cx.subscribe(&covers, |this, _, event: &CoverCacheEvent, cx| {
+            let relevant = match event {
+                CoverCacheEvent::Ready(key) => this
+                    .results
+                    .as_ref()
+                    .is_some_and(|cache| cache.cover_ids.contains(&key.track_id())),
+                CoverCacheEvent::Evicted => true,
+            };
+            if relevant {
+                cx.notify();
+            }
+        });
 
         Self {
             library,
             shell,
             covers,
-            _subs: vec![observe, observe_covers],
+            results: None,
+            _subs: vec![observe, on_cover],
         }
+    }
+
+    /// 查询词 / 可见投影 / 曲库数据都没变时，直接复用上次的搜索结果。
+    fn sync_results(&mut self, query: &str, cx: &mut App) {
+        let key = {
+            let library = self.library.read(cx);
+            SearchKey {
+                query: query.to_owned(),
+                visible_generation: library.visible_generation(),
+                data_revision: library.data_revision(),
+            }
+        };
+        if self.results.as_ref().is_some_and(|cache| cache.key == key) {
+            return;
+        }
+
+        let terms = filter::parse_query(query);
+        let (total, artist_total, album_total, list_total, artists, albums, lists, top) =
+            App::update_entity(cx, &self.library, |library, _| {
+                let total = library.visible_len();
+                let all_artists = library.artists();
+                let all_albums = library.albums();
+
+                // 分组按名称匹配，与曲目匹配同口径（`filter::matches_name`）。
+                // 分区块只画前 `BLOCK_MAX` 个，页头要的是命中总数，所以记命中下标而不是拷贝分组。
+                let artist_hits: Vec<usize> = all_artists
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, group)| filter::matches_name(&group.name, &terms))
+                    .map(|(index, _)| index)
+                    .collect();
+                let album_hits: Vec<usize> = all_albums
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, group)| filter::matches_name(&group.title, &terms))
+                    .map(|(index, _)| index)
+                    .collect();
+                let artist_matches: Vec<ArtistGroup> = artist_hits
+                    .iter()
+                    .take(BLOCK_MAX)
+                    .map(|&index| all_artists[index].clone())
+                    .collect();
+                let album_matches: Vec<AlbumGroup> = album_hits
+                    .iter()
+                    .take(BLOCK_MAX)
+                    .map(|&index| all_albums[index].clone())
+                    .collect();
+                // 收藏是虚拟歌单，不在 `Collections` 里，匹配要先问 `label_for` 拿名字。
+                let mut list_total = 0usize;
+                let list_matches: Vec<(Scope, HeroInfo)> = library
+                    .list_scopes()
+                    .into_iter()
+                    .filter_map(|scope| {
+                        let name = library.label_for(&scope)?;
+                        if !filter::matches_name(&name, &terms) {
+                            return None;
+                        }
+                        let info = hero_for(library, &scope)?;
+                        list_total += 1;
+                        (list_total <= BLOCK_MAX).then_some((scope, info))
+                    })
+                    .collect();
+
+                let top = if total > 0 {
+                    library.visible_tracks(0..1).into_iter().next()
+                } else {
+                    None
+                };
+
+                (
+                    total,
+                    artist_hits.len(),
+                    album_hits.len(),
+                    list_total,
+                    artist_matches,
+                    album_matches,
+                    list_matches,
+                    top,
+                )
+            });
+
+        let mut cover_ids = HashSet::new();
+        for group in &artists {
+            cover_ids.insert(group.representative);
+        }
+        for group in &albums {
+            cover_ids.insert(group.representative);
+        }
+        for (_, info) in &lists {
+            if let Some(id) = info.cover_id {
+                cover_ids.insert(id);
+            }
+            if let Some(file) = &info.cover_file {
+                cover_ids.insert(TrackId::from_path(file));
+            }
+        }
+        if let Some(track) = &top {
+            cover_ids.insert(track.id);
+        }
+
+        self.results = Some(SearchCache {
+            key,
+            results: SearchResults {
+                total,
+                artist_total,
+                album_total,
+                list_total,
+                artists,
+                albums,
+                lists,
+                top,
+            },
+            cover_ids,
+        });
     }
 
     fn summary(&self, cx: &App) -> String {
@@ -73,6 +229,7 @@ impl Render for SearchPage {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let query = self.library.read(cx).query().to_string();
         let searching = crate::entities::searching(&query);
+        let loading = self.library.read(cx).loading();
         let summary = self.summary(cx);
 
         // 主区左上角浮着返回按钮（`root::floating_back`），标题不让开就会被压在下面；
@@ -122,6 +279,8 @@ impl Render for SearchPage {
 
         page = if searching {
             page.child(self.results_body(&query, cx))
+        } else if loading {
+            page.child(loading_state())
         } else {
             page.child(self.browse_grid(cx))
         };
@@ -245,83 +404,26 @@ impl SearchPage {
             .into_any_element()
     }
 
-    fn results_body(&self, query: &str, cx: &mut Context<Self>) -> AnyElement {
-        let terms = filter::parse_query(query);
-        let (total, artist_total, album_total, list_total, artists, albums, lists, top) =
-            App::update_entity(cx, &self.library, |library, _| {
-                let total = library.visible_len();
-                let all_artists = library.artists();
-                let all_albums = library.albums();
-
-                // 分组按名称匹配，与曲目匹配同口径（`filter::matches_name`）。
-                // 分区块只画前 `BLOCK_MAX` 个，页头要的是命中总数，所以记命中下标而不是拷贝分组。
-                let artist_hits: Vec<usize> = all_artists
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, group)| filter::matches_name(&group.name, &terms))
-                    .map(|(index, _)| index)
-                    .collect();
-                let album_hits: Vec<usize> = all_albums
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, group)| filter::matches_name(&group.title, &terms))
-                    .map(|(index, _)| index)
-                    .collect();
-                let artist_matches: Vec<ArtistGroup> = artist_hits
-                    .iter()
-                    .take(BLOCK_MAX)
-                    .map(|&index| all_artists[index].clone())
-                    .collect();
-                let album_matches: Vec<AlbumGroup> = album_hits
-                    .iter()
-                    .take(BLOCK_MAX)
-                    .map(|&index| all_albums[index].clone())
-                    .collect();
-                // 收藏是虚拟歌单，不在 `Collections` 里，匹配要先问 `label_for` 拿名字。
-                let list_matches: Vec<(Scope, HeroInfo)> = library
-                    .list_scopes()
-                    .into_iter()
-                    .filter_map(|scope| {
-                        let name = library.label_for(&scope)?;
-                        if !filter::matches_name(&name, &terms) {
-                            return None;
-                        }
-                        hero_for(library, &scope).map(|info| (scope, info))
-                    })
-                    .collect();
-
-                let top = if total > 0 {
-                    library.visible_tracks(0..1).into_iter().next()
-                } else {
-                    None
-                };
-
-                (
-                    total,
-                    artist_hits.len(),
-                    album_hits.len(),
-                    list_matches.len(),
-                    artist_matches,
-                    album_matches,
-                    list_matches,
-                    top,
-                )
-            });
+    fn results_body(&mut self, query: &str, cx: &mut Context<Self>) -> AnyElement {
+        self.sync_results(query, cx);
+        let Some(cache) = self.results.as_ref() else {
+            return div().into_any_element();
+        };
+        let results = &cache.results;
+        let (total, artist_total, album_total, list_total) = (
+            results.total,
+            results.artist_total,
+            results.album_total,
+            results.list_total,
+        );
 
         if total == 0 && artist_total == 0 && album_total == 0 && list_total == 0 {
             return no_results().into_any_element();
         }
 
-        let artist_rows: Vec<MiniRow> = artists
-            .iter()
-            .take(BLOCK_MAX)
-            .map(MiniRow::from_artist)
-            .collect();
-        let album_rows: Vec<MiniRow> = albums
-            .iter()
-            .take(BLOCK_MAX)
-            .map(MiniRow::from_album)
-            .collect();
+        let artist_rows: Vec<MiniRow> = results.artists.iter().map(MiniRow::from_artist).collect();
+        let album_rows: Vec<MiniRow> = results.albums.iter().map(MiniRow::from_album).collect();
+        let lists = results.lists.clone();
 
         // 分组栏的 `flex_1` / `w_full` 在下面分支里加：横排与竖排的撑满方式不同。
         let groups = div()
@@ -331,7 +433,7 @@ impl SearchPage {
             .items_start()
             .child(self.group_column("艺术家", NavSection::Artists, artist_total, artist_rows, cx))
             .child(self.group_column("专辑", NavSection::Albums, album_total, album_rows, cx))
-            .child(self.list_column(lists.into_iter().take(BLOCK_MAX).collect(), cx));
+            .child(self.list_column(lists, cx));
 
         let shell_row = |children: Div| {
             div()
@@ -346,7 +448,7 @@ impl SearchPage {
         };
 
         // 没有命中的曲目时不留空的最佳结果栏。
-        let Some(track) = top else {
+        let Some(track) = results.top.clone() else {
             return shell_row(groups.flex_1()).into_any_element();
         };
 
@@ -839,6 +941,29 @@ fn thumb(
             .child(crate::common::cover::skeleton(size, radius))
             .into_any_element(),
     }
+}
+
+fn loading_state() -> impl IntoElement {
+    div()
+        .flex_none()
+        .flex()
+        .flex_col()
+        .gap(px(theme::GAP_SM))
+        .px(px(theme::GAP_LG))
+        .pb(px(theme::GAP_XL))
+        .child(
+            div()
+                .text_size(px(theme::FONT_TITLE))
+                .font_weight(theme::WEIGHT_TITLE)
+                .text_color(theme::text())
+                .child("正在读取曲库…"),
+        )
+        .child(
+            div()
+                .text_size(px(theme::FONT_BODY))
+                .text_color(theme::text_muted())
+                .child("窗口先显示，搜索与分类会在后台核对完成后出现。"),
+        )
 }
 
 fn no_results() -> impl IntoElement {

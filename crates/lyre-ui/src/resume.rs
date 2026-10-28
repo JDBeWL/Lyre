@@ -30,7 +30,7 @@ impl Resume {
 
     /// 写回磁盘。失败只记日志，不影响调用方。
     pub fn save(&self) {
-        persist::save_lossy(FILE, self);
+        persist::save_lossy(FILE, self.clone());
     }
 
     /// 关掉设置项时清掉，否则下次再开会复活一个几个月前的位置。

@@ -2,14 +2,14 @@
 //! 「最近播放」取自 [`crate::recents::Recents`]（跨重启），与队列面板的「已播放」不是同一份数据。
 
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use chrono::Timelike as _;
-use lyre_core::AlbumGroup;
+use lyre_core::{AlbumGroup, TrackId};
 
 use crate::common::thousands;
 use crate::components::detail::{HeroInfo, hero_for};
-use crate::cover::CoverCache;
+use crate::cover::{CoverCache, CoverCacheEvent};
 // `Scope` 必须显式导入：`platform::*` 里带着 `gpui::Scope<'_>`，靠 glob 引进来会撞名。
 use crate::entities::{LibraryEntity, Scope};
 use crate::icon::Glyph;
@@ -62,7 +62,21 @@ pub struct HomeView {
     /// 每个横向区块一条滚动状态。句柄必须活过这一帧，每帧新建的话偏移永远归零。
     /// `RefCell` 而不是 `&mut self`：区块构造函数还要同时借 `self.library` 等字段。
     rows: RefCell<HashMap<&'static str, ScrollHandle>>,
+    /// 首页重型派生的缓存；只在曲库数据代次变化时重建。
+    data: Option<HomeData>,
     _subs: Vec<Subscription>,
+}
+
+/// 首页一帧需要的全部派生数据。封面完成只让视图重绘，不该重新分组和排序。
+struct HomeData {
+    revision: u64,
+    recents: Vec<RecentCard>,
+    counts: (usize, usize, usize),
+    recommended: Vec<RecentCard>,
+    popular: Vec<RecentCard>,
+    lists: Vec<(Scope, HeroInfo)>,
+    /// 当前页面显示会用到封面的曲目 / 图片文件 id；封面事件据此过滤。
+    cover_ids: HashSet<TrackId>,
 }
 
 impl HomeView {
@@ -74,15 +88,71 @@ impl HomeView {
     ) -> Self {
         let observe_library = cx.observe(&library, |_, _, cx| cx.notify());
         let observe_shell = cx.observe(&shell, |_, _, cx| cx.notify());
-        let observe_covers = cx.observe(&covers, |_, _, cx| cx.notify());
+        // 不再整体 observe 封面缓存：每张图解码完成都重绘整页会让分组与排序白跑。
+        let on_cover = cx.subscribe(&covers, |this, _, event: &CoverCacheEvent, cx| {
+            let relevant = match event {
+                CoverCacheEvent::Ready(key) => this
+                    .data
+                    .as_ref()
+                    .is_some_and(|data| data.cover_ids.contains(&key.track_id())),
+                // 淘汰很少发生；错过它会让被清掉的封面一直停在占位图。
+                CoverCacheEvent::Evicted => true,
+            };
+            if relevant {
+                cx.notify();
+            }
+        });
 
         Self {
             shell,
             library,
             covers,
             rows: RefCell::default(),
-            _subs: vec![observe_library, observe_shell, observe_covers],
+            data: None,
+            _subs: vec![observe_library, observe_shell, on_cover],
         }
+    }
+
+    /// 数据代次没变就直接复用上一帧的派生结果。
+    fn sync_data(&mut self, cx: &mut App) {
+        let revision = self.library.read(cx).data_revision();
+        if self
+            .data
+            .as_ref()
+            .is_some_and(|data| data.revision == revision)
+        {
+            return;
+        }
+
+        let recents = self.recents(cx);
+        let counts = self.counts(cx);
+        let groups = self.album_groups(cx);
+        let recommended = recommend_cards(&groups, SECTION_MAX);
+        let popular = popular_cards(&groups, SECTION_MAX);
+        let lists = self.list_cards(cx);
+
+        let mut cover_ids = HashSet::new();
+        for card in recents.iter().chain(&recommended).chain(&popular) {
+            cover_ids.insert(card.id);
+        }
+        for (_, info) in &lists {
+            if let Some(id) = info.cover_id {
+                cover_ids.insert(id);
+            }
+            if let Some(file) = &info.cover_file {
+                cover_ids.insert(TrackId::from_path(file));
+            }
+        }
+
+        self.data = Some(HomeData {
+            revision,
+            recents,
+            counts,
+            recommended,
+            popular,
+            lists,
+            cover_ids,
+        });
     }
 
     fn recents(&self, cx: &mut App) -> Vec<RecentCard> {
@@ -125,12 +195,17 @@ impl Render for HomeView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         // 横向区块的箭头要点完就重绘，所以拿的是本视图的句柄，不是 &mut self
         let view = cx.entity();
-        let recents = self.recents(cx);
-        let (tracks, albums, artists) = self.counts(cx);
-        let groups = self.album_groups(cx);
-        let recommended = recommend_cards(&groups, SECTION_MAX);
-        let popular = popular_cards(&groups, SECTION_MAX);
-        let lists = self.list_cards(cx);
+        let loading = self.library.read(cx).loading();
+        self.sync_data(cx);
+        let Some(data) = self.data.as_ref() else {
+            // `sync_data` 刚刚填过；走到这里只可能是内部状态被破坏，宁可空白一帧也不 panic。
+            return div().into_any_element();
+        };
+        let recents = data.recents.clone();
+        let (tracks, albums, artists) = data.counts;
+        let recommended = data.recommended.clone();
+        let popular = data.popular.clone();
+        let lists = data.lists.clone();
 
         let mut page = div()
             .id("home-page")
@@ -162,7 +237,11 @@ impl Render for HomeView {
                         .flex_none()
                         .text_size(px(theme::FONT_BODY))
                         .text_color(theme::text_muted())
-                        .child(greeting_hint(tracks == 0, !recents.is_empty())),
+                        .child(if loading {
+                            "正在读取曲库…".to_owned()
+                        } else {
+                            greeting_hint(tracks == 0, !recents.is_empty()).to_owned()
+                        }),
                 ),
         );
 

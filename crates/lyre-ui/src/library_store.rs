@@ -14,18 +14,33 @@ pub fn load() -> Vec<Track> {
 
 /// 写回磁盘。失败只记日志 —— `%APPDATA%` 只读不该让播放器打不开。
 /// 用紧凑排版：整库条目可能上千，缩进会让文件涨好几倍。
-pub fn save(tracks: &impl serde::Serialize) {
+pub fn save(tracks: Vec<Track>) {
     persist::save_compact_lossy(FILE, tracks);
 }
 
 /// 一个都不在时要原样保留：那是盘没醒 / 可移动盘没挂载，照常剔除会把整库覆盖成空。
+/// 每个路径只查一次：先记下存在性，再根据「有没有一个活着」决定保留策略。
 fn prune_missing(tracks: Vec<Track>) -> Vec<Track> {
-    if !tracks.is_empty() && tracks.iter().all(|track| !track.path.is_file()) {
-        return tracks;
+    prune_missing_with(tracks, std::path::Path::is_file)
+}
+
+fn prune_missing_with(
+    tracks: Vec<Track>,
+    mut exists: impl FnMut(&std::path::Path) -> bool,
+) -> Vec<Track> {
+    let mut checked = Vec::with_capacity(tracks.len());
+    let mut present = 0usize;
+    for track in tracks {
+        let alive = exists(&track.path);
+        present += usize::from(alive);
+        checked.push((track, alive));
     }
-    tracks
+    if !checked.is_empty() && present == 0 {
+        return checked.into_iter().map(|(track, _)| track).collect();
+    }
+    checked
         .into_iter()
-        .filter(|track| track.path.is_file())
+        .filter_map(|(track, alive)| alive.then_some(track))
         .collect()
 }
 
@@ -88,6 +103,27 @@ mod tests {
             "全都不在时要原样返回，而不是清空"
         );
 
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// 逐条核对只查一遍：部分失效与整盘未挂载共用同一趟扫描。
+    #[test]
+    fn every_path_is_checked_exactly_once() {
+        let dir = temp_dir("single-pass");
+        let tracks = vec![
+            track(&dir.join("a.flac").to_string_lossy()),
+            track(&dir.join("b.flac").to_string_lossy()),
+            track(&dir.join("c.flac").to_string_lossy()),
+        ];
+        let mut checks = 0usize;
+
+        let kept = super::prune_missing_with(tracks, |path| {
+            checks += 1;
+            path.ends_with("b.flac")
+        });
+
+        assert_eq!(checks, 3, "每个路径只能查一次");
+        assert_eq!(kept.len(), 1, "部分失效时只保留存在的条目");
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

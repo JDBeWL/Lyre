@@ -59,8 +59,8 @@ pub struct TrackList {
     selected: Rc<HashSet<TrackId>>,
     /// 最近一次点中的行号，Shift 连选从这里起算。
     anchor: Option<usize>,
-    /// 上一次渲染时的作用域。换了作用域就清空勾选 —— 勾着的曲目已经不在眼前了。
-    scope_seen: Scope,
+    /// 上次清理选择时对应的可见投影代次。只在换代时清理，渲染本身不再扫全表。
+    selection_generation: u64,
     _subs: Vec<Subscription>,
 }
 
@@ -90,7 +90,7 @@ impl TrackList {
         };
 
         Self {
-            scope_seen: library.read(cx).scope().clone(),
+            selection_generation: library.read(cx).visible_generation(),
             library,
             shell,
             covers,
@@ -105,14 +105,26 @@ impl TrackList {
 
 impl Render for TrackList {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let scope_now = self.library.read(cx).scope().clone();
-        if scope_now != self.scope_seen {
-            self.scope_seen = scope_now;
-            Rc::make_mut(&mut self.selected).clear();
-            self.anchor = None;
+        // 查询 / 作用域 / 删歌都会让可见投影换代；只有这时才需要清掉看不见的勾选。
+        let generation = self.library.read(cx).visible_generation();
+        if generation != self.selection_generation {
+            self.selection_generation = generation;
+            self.prune_selection(cx);
         }
 
-        let (count, total, playing, focus, filtering, sort_key, scanning, scoped, scope, from_list) = {
+        let (
+            count,
+            total,
+            playing,
+            focus,
+            filtering,
+            sort_key,
+            scanning,
+            scoped,
+            scope,
+            from_list,
+            loading,
+        ) = {
             let library = self.library.read(cx);
             (
                 library.visible_len(),
@@ -130,6 +142,7 @@ impl Render for TrackList {
                 library.scope().is_scoped(),
                 library.scope_label(),
                 matches!(library.scope(), Scope::Collection(_) | Scope::Favorites),
+                library.loading(),
             )
         };
         let (kind, collection) = {
@@ -145,8 +158,8 @@ impl Render for TrackList {
         };
         let reorderable = toolbar::can_reorder(collection.is_some(), filtering, count);
 
-        // 勾选只算看得见的行，否则搜索把行筛掉后「已选 N」把看不见的也算进去
-        let chosen = self.chosen(cx);
+        // 选择已经在投影换代时清理过，这里只取数量；有序 ID 留到批量动作执行时再生成。
+        let chosen_count = self.selected.len();
         let selecting = self.selecting;
         let selected = Rc::clone(&self.selected);
 
@@ -188,7 +201,8 @@ impl Render for TrackList {
             ))
             .when(selecting, |column| {
                 column.child(batch::batch_bar(batch::BatchBar {
-                    chosen,
+                    chosen_count,
+                    selected: Rc::clone(&self.selected),
                     rows: count,
                     collection,
                     library: self.library.clone(),
@@ -197,7 +211,9 @@ impl Render for TrackList {
             })
             .child(row::column_header(&env));
 
-        let body: AnyElement = if total == 0 {
+        let body: AnyElement = if loading {
+            empty::loading_library().into_any_element()
+        } else if total == 0 {
             empty::empty_library(self.library.clone()).into_any_element()
         } else if count == 0 {
             let (query, scope) = {

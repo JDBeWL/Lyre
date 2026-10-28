@@ -3,9 +3,15 @@
 
 mod error;
 
+use std::collections::HashMap;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
+use std::sync::{Arc, OnceLock};
+use std::thread;
+use std::time::{Duration, Instant};
 
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -13,6 +19,11 @@ use serde::de::DeserializeOwned;
 pub use error::PersistError;
 
 const APP_DIR: &str = "Lyre";
+
+/// 后台写线程合并连续写入的窗口。UI 线程只入队，磁盘延迟不进入输入路径。
+const COALESCE_WINDOW: Duration = Duration::from_millis(150);
+/// 退出前等待后台刷盘的耐心上限；正常情况下一个 rename 就结束。
+const FLUSH_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// 各平台用户数据目录；环境变量缺失时返回 `None`。
 pub fn data_dir() -> Option<PathBuf> {
@@ -87,13 +98,222 @@ pub fn load_or_none<T: DeserializeOwned>(file: &str) -> Option<T> {
 }
 
 /// 写 JSON，带缩进；条目可能上千的 `library.json` 走 [`save_compact_lossy`]。
-pub fn save_lossy<T: Serialize>(file: &str, value: &T) {
-    log_if_failed(file, save(file, value, render_pretty));
+/// 值交给后台写线程，调用线程不序列化也不碰磁盘。
+pub fn save_lossy<T: Serialize + Send + 'static>(file: &'static str, value: T) {
+    writer().enqueue_save(file, value, render_pretty);
 }
 
 /// 写 JSON，紧凑（无缩进）。给 `library.json`：整库条目可能上千，缩进会让文件涨好几倍。
-pub fn save_compact_lossy<T: Serialize>(file: &str, value: &T) {
-    log_if_failed(file, save(file, value, render_compact));
+pub fn save_compact_lossy<T: Serialize + Send + 'static>(file: &'static str, value: T) {
+    writer().enqueue_save(file, value, render_compact);
+}
+
+/// 等后台线程把已入队的写入落盘。退出前调用；平时不阻塞 UI。
+pub fn flush() {
+    if let Some(writer) = WRITER.get() {
+        writer.flush();
+    }
+}
+
+/// 累计落盘次数与字节数，验收写入放大时读它。
+pub fn write_stats() -> (u64, u64) {
+    WRITER.get().map_or((0, 0), |writer| {
+        (
+            writer.stats.writes.load(Ordering::Relaxed),
+            writer.stats.bytes.load(Ordering::Relaxed),
+        )
+    })
+}
+
+static WRITER: OnceLock<Writer> = OnceLock::new();
+
+fn writer() -> &'static Writer {
+    WRITER.get_or_init(|| Writer::start(None))
+}
+
+#[derive(Default)]
+struct Stats {
+    writes: AtomicU64,
+    bytes: AtomicU64,
+}
+
+pub(crate) struct Writer {
+    /// `None` = 写线程没起来，退化为调用线程同步写；极罕见，但比 panic 或静默丢写强。
+    tx: Option<Sender<Command>>,
+    root: Option<PathBuf>,
+    stats: Arc<Stats>,
+}
+
+enum Command {
+    Save(SaveJob),
+    Remove(&'static str),
+    Flush(Sender<()>),
+}
+
+type SaveTask = Box<dyn FnOnce(Option<&Path>) -> Result<usize, PersistError> + Send>;
+
+struct SaveJob {
+    file: &'static str,
+    apply: SaveTask,
+}
+
+impl SaveJob {
+    fn file(&self) -> &'static str {
+        self.file
+    }
+}
+
+impl Writer {
+    fn start(root: Option<PathBuf>) -> Self {
+        let (tx, rx) = mpsc::channel();
+        let stats = Arc::new(Stats::default());
+        let worker_stats = Arc::clone(&stats);
+        let worker_root = root.clone();
+        let spawned = thread::Builder::new()
+            .name("lyre-persist".to_owned())
+            .spawn(move || run_writer(&rx, worker_root.as_deref(), &worker_stats));
+        if let Err(err) = spawned {
+            log::error!("持久化线程起不来，改为同步写入：{err}");
+            return Self {
+                tx: None,
+                root,
+                stats,
+            };
+        }
+        Self {
+            tx: Some(tx),
+            root,
+            stats,
+        }
+    }
+
+    fn enqueue_save<T: Serialize + Send + 'static>(
+        &self,
+        file: &'static str,
+        value: T,
+        render: fn(&T) -> serde_json::Result<String>,
+    ) {
+        let job = SaveJob {
+            file,
+            apply: Box::new(move |root| {
+                let Some(path) = path_for(root, file) else {
+                    return Err(PersistError::NoDataDir);
+                };
+                if let Some(parent) = path.parent()
+                    && let Err(source) = fs::create_dir_all(parent)
+                {
+                    return Err(PersistError::Io { path, source });
+                }
+                let text = render(&value)?;
+                write_atomic(&path, &text).map_err(|source| PersistError::Io { path, source })?;
+                Ok(text.len())
+            }),
+        };
+        match &self.tx {
+            // 接收端已经退出（进程收尾）时只能放弃这次写入，不能把退出路径卡住。
+            Some(tx) => {
+                let _ = tx.send(Command::Save(job));
+            }
+            None => match (job.apply)(self.root.as_deref()) {
+                Ok(bytes) => {
+                    self.stats.writes.fetch_add(1, Ordering::Relaxed);
+                    self.stats.bytes.fetch_add(bytes as u64, Ordering::Relaxed);
+                }
+                Err(err) => log::warn!("写入 {file} 失败（本次不持久化）：{err}"),
+            },
+        }
+    }
+
+    fn remove(&self, file: &'static str) {
+        match &self.tx {
+            Some(tx) => {
+                let _ = tx.send(Command::Remove(file));
+            }
+            None => remove_at(self.root.as_deref(), file),
+        }
+    }
+
+    fn flush(&self) {
+        let Some(tx) = &self.tx else {
+            return;
+        };
+        let (done, wait) = mpsc::channel();
+        if tx.send(Command::Flush(done)).is_ok() {
+            let _ = wait.recv_timeout(FLUSH_TIMEOUT);
+        }
+    }
+}
+
+/// 后台单写线程：同一文件的连续保存合并成一次，窗口结束统一落盘。
+fn run_writer(rx: &Receiver<Command>, root: Option<&Path>, stats: &Stats) {
+    let mut pending: HashMap<&'static str, SaveJob> = HashMap::new();
+
+    loop {
+        match rx.recv() {
+            Ok(Command::Save(job)) => {
+                pending.insert(job.file(), job);
+
+                let deadline = Instant::now() + COALESCE_WINDOW;
+                loop {
+                    let now = Instant::now();
+                    if now >= deadline {
+                        break;
+                    }
+                    match rx.recv_timeout(deadline - now) {
+                        Ok(Command::Save(job)) => {
+                            pending.insert(job.file(), job);
+                        }
+                        Ok(Command::Remove(file)) => {
+                            pending.remove(file);
+                            remove_at(root, file);
+                        }
+                        Ok(Command::Flush(done)) => {
+                            apply_pending(&mut pending, root, stats);
+                            let _ = done.send(());
+                        }
+                        Err(RecvTimeoutError::Timeout) => break,
+                        Err(RecvTimeoutError::Disconnected) => {
+                            apply_pending(&mut pending, root, stats);
+                            return;
+                        }
+                    }
+                }
+                apply_pending(&mut pending, root, stats);
+            }
+            Ok(Command::Remove(file)) => remove_at(root, file),
+            Ok(Command::Flush(done)) => {
+                apply_pending(&mut pending, root, stats);
+                let _ = done.send(());
+            }
+            Err(_) => {
+                apply_pending(&mut pending, root, stats);
+                return;
+            }
+        }
+    }
+}
+
+fn apply_pending(pending: &mut HashMap<&'static str, SaveJob>, root: Option<&Path>, stats: &Stats) {
+    for (file, job) in pending.drain() {
+        match (job.apply)(root) {
+            Ok(bytes) => {
+                stats.writes.fetch_add(1, Ordering::Relaxed);
+                stats.bytes.fetch_add(bytes as u64, Ordering::Relaxed);
+            }
+            Err(err) => log::warn!("写入 {file} 失败（本次不持久化）：{err}"),
+        }
+    }
+}
+
+fn remove_at(root: Option<&Path>, file: &'static str) {
+    let Some(path) = path_for(root, file) else {
+        return;
+    };
+    match fs::remove_file(&path) {
+        Ok(()) => {}
+        Err(err) if err.kind() == io::ErrorKind::NotFound => {}
+        Err(err) => log::warn!("删除 {file} 失败：{err}"),
+    }
 }
 
 fn render_pretty<T: Serialize>(value: &T) -> serde_json::Result<String> {
@@ -105,39 +325,16 @@ fn render_compact<T: Serialize>(value: &T) -> serde_json::Result<String> {
 }
 
 /// 删除一个文件（不存在视为成功）。失败只记日志。
-pub fn remove_lossy(file: &str) {
-    let Some(path) = path_of(file) else {
-        return;
-    };
-    match fs::remove_file(&path) {
-        Ok(()) => {}
-        Err(err) if err.kind() == io::ErrorKind::NotFound => {}
-        Err(err) => log::warn!("删除 {file} 失败：{err}"),
-    }
+pub fn remove_lossy(file: &'static str) {
+    writer().remove(file);
 }
 
-/// 写盘失败只记日志：存不下不该影响主流程（播放还得继续）。
-fn log_if_failed(file: &str, result: Result<(), PersistError>) {
-    if let Err(err) = result {
-        log::warn!("写入 {file} 失败（本次不持久化）：{err}");
+/// 数据目录下的文件；测试用 `root` 覆盖，生产回落到 [`data_dir`]。
+fn path_for(root: Option<&Path>, file: &str) -> Option<PathBuf> {
+    match root {
+        Some(root) => Some(root.join(file)),
+        None => path_of(file),
     }
-}
-
-fn save<T: Serialize>(
-    file: &str,
-    value: &T,
-    render: impl FnOnce(&T) -> serde_json::Result<String>,
-) -> Result<(), PersistError> {
-    let Some(path) = path_of(file) else {
-        return Err(PersistError::NoDataDir);
-    };
-    if let Some(parent) = path.parent()
-        && let Err(source) = fs::create_dir_all(parent)
-    {
-        return Err(PersistError::Io { path, source });
-    }
-    let text = render(value)?;
-    write_atomic(&path, &text).map_err(|source| PersistError::Io { path, source })
 }
 
 #[cfg(test)]
@@ -198,6 +395,73 @@ mod tests {
     fn a_missing_file_falls_back_to_default() {
         let value: Vec<u32> = load_or_default("mp-next-probe-does-not-exist.json");
         assert!(value.is_empty());
+    }
+
+    /// 连续保存同一个文件只落最后一次：删除一首后连续编辑不该把整库重写多遍。
+    #[test]
+    fn consecutive_saves_to_one_file_are_coalesced() {
+        use super::{Writer, render_compact};
+        use std::sync::atomic::Ordering;
+
+        let dir = temp_dir("coalesce");
+        let writer = Writer::start(Some(dir.clone()));
+        for n in 0..5u32 {
+            writer.enqueue_save("state.json", vec![n], render_compact);
+        }
+        writer.flush();
+
+        assert_eq!(
+            std::fs::read_to_string(dir.join("state.json")).unwrap(),
+            "[4]",
+            "合并后落盘的应当是最后一份"
+        );
+        assert_eq!(
+            writer.stats.writes.load(Ordering::Relaxed),
+            1,
+            "五次入队只该真正写一次"
+        );
+        assert_eq!(
+            writer.stats.bytes.load(Ordering::Relaxed),
+            3,
+            "字节统计要数真正写出去的 JSON"
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// 不同文件不能互相覆盖：合并只发生在同一个目标文件上。
+    #[test]
+    fn different_files_are_all_written() {
+        use super::{Writer, render_compact};
+        use std::sync::atomic::Ordering;
+
+        let dir = temp_dir("two-files");
+        let writer = Writer::start(Some(dir.clone()));
+        writer.enqueue_save("a.json", vec![1u32], render_compact);
+        writer.enqueue_save("b.json", vec![2u32], render_compact);
+        writer.flush();
+
+        assert_eq!(std::fs::read_to_string(dir.join("a.json")).unwrap(), "[1]");
+        assert_eq!(std::fs::read_to_string(dir.join("b.json")).unwrap(), "[2]");
+        assert_eq!(writer.stats.writes.load(Ordering::Relaxed), 2);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// 删文件与保存同一文件时以最后的动作为准：关掉续播后不能又被一次保存复活。
+    #[test]
+    fn a_later_remove_cancels_a_pending_save() {
+        use super::{Writer, render_compact};
+
+        let dir = temp_dir("save-remove");
+        let writer = Writer::start(Some(dir.clone()));
+        writer.enqueue_save("resume.json", vec![1u32], render_compact);
+        writer.remove("resume.json");
+        writer.flush();
+
+        assert!(
+            !dir.join("resume.json").exists(),
+            "后到的删除必须压过先到的保存"
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     /// 七份 store 的载荷形状对照表：顶层是不是裸数组、`TrackId` 是不是裸数字、`Collections` 有没有 `next`。

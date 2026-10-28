@@ -3932,7 +3932,7 @@ dependencies = [
 
 [[package]]
 name = "lyre-app"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "log",
  "lyre-ui",
@@ -3940,7 +3940,7 @@ dependencies = [
 
 [[package]]
 name = "lyre-audio"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "ape-decoder",
  "crossbeam-channel",
@@ -3956,7 +3956,7 @@ dependencies = [
 
 [[package]]
 name = "lyre-audio-exclusive"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "audioadapter-buffers",
  "crossbeam-channel",
@@ -3973,11 +3973,11 @@ dependencies = [
 
 [[package]]
 name = "lyre-audio-simd"
-version = "0.2.1"
+version = "0.2.2"
 
 [[package]]
 name = "lyre-core"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "criterion",
  "encoding_rs",
@@ -3989,7 +3989,7 @@ dependencies = [
 
 [[package]]
 name = "lyre-ui"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "chrono",
  "gpui-component",

@@ -136,6 +136,9 @@ pub struct Playlist {
     /// 只决定 `order` 的成分，不动 `tracks`。
     #[serde(skip)]
     queue: Option<Vec<TrackId>>,
+    /// 队列结构或游标的代次：队列面板据此缓存行模型，避免每次重绘都全量取曲目。
+    #[serde(skip)]
+    revision: u64,
 }
 
 impl Playlist {
@@ -165,6 +168,15 @@ impl Playlist {
 
     pub fn cursor(&self) -> usize {
         self.pos
+    }
+
+    /// 队列结构或游标的代次。只在会改变 `order` / `pos` 的操作后前进。
+    pub fn revision(&self) -> u64 {
+        self.revision
+    }
+
+    fn touch(&mut self) {
+        self.revision = self.revision.wrapping_add(1);
     }
 
     pub fn by_id(&self, id: TrackId) -> Option<&Track> {
@@ -219,6 +231,9 @@ impl Playlist {
                 added += 1;
             }
         }
+        if added > 0 {
+            self.touch();
+        }
         if self.sort != SortKey::ImportOrder {
             // 否则新歌全堆在末尾、刷新过标签的旧歌还停在原位，列表看着就没排过序
             self.apply_sort();
@@ -233,6 +248,7 @@ impl Playlist {
         self.import_seq.clear();
         self.queue = None;
         self.pos = 0;
+        self.touch();
     }
 
     /// 重建 `index`。任何改动 `tracks` 次序的地方都要调它。
@@ -299,11 +315,15 @@ impl Playlist {
         self.pos = current
             .and_then(|id| self.order.iter().position(|x| *x == id))
             .unwrap_or(0);
+        self.touch();
     }
 
     pub fn play_order_index(&mut self, n: usize) -> bool {
         if n < self.order.len() {
-            self.pos = n;
+            if self.pos != n {
+                self.pos = n;
+                self.touch();
+            }
             true
         } else {
             false
@@ -314,7 +334,10 @@ impl Playlist {
     pub fn jump_to(&mut self, id: TrackId) -> bool {
         match self.order.iter().position(|x| *x == id) {
             Some(n) => {
-                self.pos = n;
+                if self.pos != n {
+                    self.pos = n;
+                    self.touch();
+                }
                 true
             }
             None => false,
@@ -344,6 +367,7 @@ impl Playlist {
         } else {
             self.pos = self.pos.min(self.order.len() - 1);
         }
+        self.touch();
         true
     }
 
@@ -376,6 +400,7 @@ impl Playlist {
         if !self.order.is_empty() {
             self.pos = self.pos.min(self.order.len() - 1);
         }
+        self.touch();
         true
     }
 
@@ -397,6 +422,9 @@ impl Playlist {
         }
         if !self.order.is_empty() {
             self.pos = self.pos.min(self.order.len() - 1);
+        }
+        if restored > 0 {
+            self.touch();
         }
         restored
     }
@@ -463,6 +491,7 @@ impl Playlist {
                 .and_then(|id| self.order.iter().position(|x| *x == id))
                 .unwrap_or(0);
         }
+        self.touch();
     }
 
     /// 用户点了「下一曲」。播不出来的曲目照常留在曲库与列表里（界面置灰），队列不在其上停留 ——
@@ -486,7 +515,10 @@ impl Playlist {
             }
 
             if self.playable_at(n) {
-                self.pos = n;
+                if self.pos != n {
+                    self.pos = n;
+                    self.touch();
+                }
                 return Advance::To(n);
             }
         }
@@ -513,7 +545,10 @@ impl Playlist {
             }
 
             if self.playable_at(n) {
-                self.pos = n;
+                if self.pos != n {
+                    self.pos = n;
+                    self.touch();
+                }
                 return Advance::To(n);
             }
         }
@@ -1134,6 +1169,25 @@ mod tests {
             Some(track(0).id),
             "队列光标在导入完成时就非空 —— 这正是它不能当「正在播放」用的原因"
         );
+    }
+
+    /// 队列面板按代次缓存行模型：只有结构 / 游标变化才前进，刷新标签不该让它白重建。
+    #[test]
+    fn revision_advances_on_queue_mutations_not_on_label_refresh() {
+        let mut p = playlist(3);
+        let after_push = p.revision();
+        assert_eq!(p.push([track(0)]), 0, "同 id 是替换，不是新增");
+        assert_eq!(p.revision(), after_push, "只刷新标签不该让行模型失效");
+
+        assert!(p.jump_to(track(2).id));
+        let after_jump = p.revision();
+        assert_ne!(after_jump, after_push, "换当前曲要重建行模型");
+
+        assert_eq!(p.next(), Advance::Stop);
+        assert_eq!(p.revision(), after_jump, "游标已经在末尾，再前进是空操作");
+
+        p.remove(track(1).id);
+        assert_ne!(p.revision(), after_jump, "删歌改变了队列成分");
     }
 
     /// 队列定下来之后推进只在队列里走，走到头就停，不滑进整库的下一首。

@@ -2,6 +2,50 @@
 
 use lyre_core::Track;
 
+/// 预先小写化的检索字段。查询每敲一个字符要过全库，不能在匹配时再逐字符小写。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SearchFields {
+    title: String,
+    artist: String,
+    album: String,
+}
+
+impl SearchFields {
+    pub fn new(track: &Track) -> Self {
+        Self {
+            title: track.title.to_lowercase(),
+            artist: track.artist.as_deref().unwrap_or("").to_lowercase(),
+            album: track.album.as_deref().unwrap_or("").to_lowercase(),
+        }
+    }
+
+    /// 全部词元命中（AND）。
+    pub fn matches(&self, terms: &[String]) -> bool {
+        terms.iter().all(|term| self.matches_term(term))
+    }
+
+    fn matches_term(&self, term: &str) -> bool {
+        self.title.contains(term) || self.artist.contains(term) || self.album.contains(term)
+    }
+}
+
+/// 查询是否只是在原查询上继续追加字符。成立时可以直接在上一次结果里收窄，不必扫全库。
+pub fn narrows(old: &[String], new: &[String]) -> bool {
+    old.len() <= new.len()
+        && old
+            .iter()
+            .zip(new)
+            .all(|(old, new)| new.starts_with(old.as_str()))
+}
+
+/// 在上一次结果集里按新词元继续收窄。顺序沿用传入的可见行顺序。
+pub fn narrow_in(fields: &[SearchFields], rows: &[usize], terms: &[String]) -> Vec<usize> {
+    rows.iter()
+        .copied()
+        .filter(|index| fields.get(*index).is_some_and(|field| field.matches(terms)))
+        .collect()
+}
+
 /// 把查询串按空白拆成词元，全部转小写（匹配大小写不敏感）。
 pub fn parse_query(query: &str) -> Vec<String> {
     query.split_whitespace().map(str::to_lowercase).collect()
@@ -76,29 +120,39 @@ pub fn project_in(
     terms: &[String],
     base: Option<&[usize]>,
 ) -> Option<Vec<usize>> {
-    let iter: Box<dyn Iterator<Item = usize> + '_> = match base {
-        Some(rows) => Box::new(rows.iter().copied()),
-        None => Box::new(0..tracks.len()),
-    };
+    let fields: Vec<SearchFields> = tracks.iter().map(SearchFields::new).collect();
+    project_in_fields(&fields, terms, base)
+}
 
+/// 已缓存检索字段的投影：生产路径走这条，避免每次查询重新小写整库。
+pub fn project_in_fields(
+    fields: &[SearchFields],
+    terms: &[String],
+    base: Option<&[usize]>,
+) -> Option<Vec<usize>> {
     if terms.is_empty() {
         // 无词元时照搬作用域；无作用域才是「全部可见」
         return base.map(<[usize]>::to_vec);
     }
 
-    Some(
-        iter.filter(|index| {
-            tracks
-                .get(*index)
-                .is_some_and(|track| matches(track, terms))
-        })
-        .collect(),
-    )
+    match base {
+        Some(rows) => Some(narrow_in(fields, rows, terms)),
+        None => Some(
+            fields
+                .iter()
+                .enumerate()
+                .filter_map(|(index, field)| field.matches(terms).then_some(index))
+                .collect(),
+        ),
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{contains_ci, matches, parse_query, project, project_in};
+    use super::{
+        SearchFields, contains_ci, matches, narrow_in, narrows, parse_query, project, project_in,
+        project_in_fields,
+    };
     use lyre_core::Track;
     use std::path::PathBuf;
 
@@ -237,5 +291,42 @@ mod tests {
     fn projection_can_be_empty() {
         let rows = project(&library(), &parse_query("不存在的东西")).unwrap();
         assert!(rows.is_empty(), "全部不命中时应当是空投影而不是 None");
+    }
+
+    /// 预先小写化后的字段必须与逐字符比较给出同样的命中结果。
+    #[test]
+    fn cached_fields_agree_with_the_live_matcher() {
+        let tracks = library();
+        let fields: Vec<SearchFields> = tracks.iter().map(SearchFields::new).collect();
+        for query in ["陈屿", "NEON", "naïve", "夜航 城市", "不存在的"] {
+            let terms = parse_query(query);
+            assert_eq!(
+                project_in_fields(&fields, &terms, None),
+                project_in(&tracks, &terms, None),
+                "查询「{query}」的缓存结果与逐字符匹配不一致"
+            );
+        }
+    }
+
+    #[test]
+    fn only_appending_characters_counts_as_narrowing() {
+        assert!(narrows(&parse_query("夜"), &parse_query("夜航")));
+        assert!(narrows(&parse_query("夜航"), &parse_query("夜航 城")));
+        assert!(narrows(&parse_query(""), &parse_query("夜")));
+        assert!(!narrows(&parse_query("夜航"), &parse_query("夜")));
+        assert!(narrows(&parse_query("夜航"), &parse_query("夜航西飞")));
+        assert!(!narrows(&parse_query("夜航 城"), &parse_query("夜航 市")));
+    }
+
+    #[test]
+    fn narrowing_gives_the_same_rows_as_a_full_projection() {
+        let tracks = library();
+        let fields: Vec<SearchFields> = tracks.iter().map(SearchFields::new).collect();
+        let first = project_in_fields(&fields, &parse_query("陈"), None).unwrap();
+        let narrowed = narrow_in(&fields, &first, &parse_query("陈屿 城市"));
+        let full = project_in_fields(&fields, &parse_query("陈屿 城市"), None).unwrap();
+
+        assert_eq!(narrowed, full, "追加输入后的结果必须与整库重算一致");
+        assert!(narrowed.len() <= first.len(), "收窄只能让结果变少");
     }
 }

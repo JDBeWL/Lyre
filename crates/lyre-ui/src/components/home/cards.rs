@@ -82,11 +82,31 @@ pub fn recommend_cards(groups: &[AlbumGroup], limit: usize) -> Vec<RecentCard> {
         .collect()
 }
 
-/// 「热门专辑」：按组内曲目数降序取前 `limit` 张。`sort_by_key` 稳定，数量相同保持原有名称序。
+/// 「热门专辑」：按组内曲目数降序取前 `limit` 张。数量相同保持原有名称序。
+/// 只做部分选择：整库几千张专辑时不必为了前 12 张全排序。
 pub fn popular_cards(groups: &[AlbumGroup], limit: usize) -> Vec<RecentCard> {
-    let mut sorted: Vec<&AlbumGroup> = recommendable(groups);
-    sorted.sort_by_key(|group| std::cmp::Reverse(group.track_count()));
-    sorted.into_iter().take(limit).map(album_card).collect()
+    if limit == 0 {
+        return Vec::new();
+    }
+    let mut ranked: Vec<(usize, &AlbumGroup)> =
+        recommendable(groups).into_iter().enumerate().collect();
+    if ranked.len() > limit {
+        ranked.select_nth_unstable_by(limit - 1, |a, b| {
+            b.1.track_count()
+                .cmp(&a.1.track_count())
+                .then(a.0.cmp(&b.0))
+        });
+        ranked.truncate(limit);
+    }
+    ranked.sort_unstable_by(|a, b| {
+        b.1.track_count()
+            .cmp(&a.1.track_count())
+            .then(a.0.cmp(&b.0))
+    });
+    ranked
+        .into_iter()
+        .map(|(_, group)| album_card(group))
+        .collect()
 }
 
 /// 能上首页的专辑分组：排除「未知专辑」这一桶。它是没标签曲目的归处，又因为收得多而常排最前。
@@ -199,6 +219,37 @@ mod tests {
         assert_eq!(cards[0].album, "多");
         assert_eq!(cards[0].meta, "3 首");
         assert_eq!(cards[1].album, "少");
+    }
+
+    #[test]
+    fn popular_ties_keep_the_original_album_order_after_partial_selection() {
+        let tracks = vec![
+            track(0, "a", Some("乙"), None),
+            track(1, "b", Some("甲"), None),
+            track(2, "c", Some("丙"), None),
+            track(3, "d", Some("甲"), None),
+            track(4, "e", Some("乙"), None),
+        ];
+        let groups = lyre_core::group_by_album(&tracks);
+        let expected: Vec<String> = groups
+            .iter()
+            .filter(|group| {
+                group.title.as_str() != lyre_core::UNKNOWN_ALBUM && group.track_count() == 2
+            })
+            .take(2)
+            .map(|group| group.title.clone())
+            .collect();
+        let cards = popular_cards(&groups, 2);
+
+        assert_eq!(cards.len(), 2);
+        assert_eq!(
+            cards
+                .iter()
+                .map(|card| card.album.as_str())
+                .collect::<Vec<_>>(),
+            expected,
+            "并列时保持分组原有顺序"
+        );
     }
 
     #[test]

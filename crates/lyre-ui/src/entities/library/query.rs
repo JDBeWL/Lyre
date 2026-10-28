@@ -1,6 +1,8 @@
 //! 搜索过滤与可见行投影：`visible` 存可见曲目在 `playlist.tracks()` 里的下标，无过滤时为 `None`。
 //! 改变曲目集合或作用域的地方都要调 [`LibraryEntity::recompute_visible`]。
 
+use std::rc::Rc;
+
 use lyre_core::{Track, TrackId, album_key, artist_keys};
 
 use crate::entities::filter;
@@ -77,6 +79,11 @@ impl LibraryEntity {
         }
     }
 
+    /// 可见投影的代次。只在投影真的重算时前进，渲染路径用它判断要不要清理失效选择。
+    pub fn visible_generation(&self) -> u64 {
+        self.visible_generation
+    }
+
     /// 光标所在的可见行号。
     pub fn focus_row(&self) -> Option<usize> {
         self.focus.and_then(|id| self.row_of(id))
@@ -85,30 +92,89 @@ impl LibraryEntity {
     /// 某首曲目落在第几行（可见投影内）。无投影时就是曲库下标。
     pub fn row_of(&self, id: TrackId) -> Option<usize> {
         match &self.visible {
-            Some(rows) => {
-                let library_index = self.playlist.index_of(id)?;
-                rows.iter().position(|i| *i == library_index)
-            }
+            Some(_) => self.row_by_id.as_ref()?.get(&id).copied(),
             None => self.playlist.index_of(id),
         }
     }
 
+    /// 这首曲目是否在当前可见投影里。无投影时只判断它还在不在曲库。
+    pub fn is_visible(&self, id: TrackId) -> bool {
+        match &self.visible {
+            Some(_) => self
+                .row_by_id
+                .as_ref()
+                .is_some_and(|rows| rows.contains_key(&id)),
+            None => self.playlist.by_id(id).is_some(),
+        }
+    }
+
     /// 设置搜索词并重算投影。搜索只改变哪些行可见，不改播放队列。
+    /// 追加输入时只在上一批结果里继续收窄，开销跟结果数而不是整库走。
     pub fn set_query(&mut self, query: impl Into<String>, cx: &mut Context<Self>) {
         let query = query.into();
         if self.query == query {
             return;
         }
+        let old_terms = filter::parse_query(&self.query);
+        let new_terms = filter::parse_query(&query);
+        let can_narrow = self.visible.is_some() && filter::narrows(&old_terms, &new_terms);
         self.query = query;
-        self.recompute_visible(cx);
+
+        if can_narrow {
+            let fields = self.search_fields();
+            let narrowed = filter::narrow_in(
+                &fields,
+                self.visible.as_deref().unwrap_or_default(),
+                &new_terms,
+            );
+            self.install_visible(Some(narrowed), cx);
+        } else {
+            self.recompute_visible(cx);
+        }
         cx.notify();
     }
 
     /// 重算投影（作用域 ∩ 搜索词），并把光标修正到仍然可见的位置。
     pub(super) fn recompute_visible(&mut self, cx: &mut Context<Self>) {
+        let fields = self.search_fields();
         let terms = filter::parse_query(&self.query);
         let scope = self.scope_rows();
-        self.visible = filter::project_in(self.playlist.tracks(), &terms, scope.as_deref());
+        let visible = filter::project_in_fields(&fields, &terms, scope.as_deref());
+        self.install_visible(visible, cx);
+    }
+
+    /// 缓存的小写检索字段；曲目集合变化由 [`Self::invalidate`] 置空。
+    fn search_fields(&mut self) -> Rc<Vec<filter::SearchFields>> {
+        if let Some(fields) = &self.search_fields {
+            return Rc::clone(fields);
+        }
+        let fields = Rc::new(
+            self.playlist
+                .tracks()
+                .iter()
+                .map(filter::SearchFields::new)
+                .collect(),
+        );
+        self.search_fields = Some(Rc::clone(&fields));
+        fields
+    }
+
+    /// 换上新的可见投影，同步反查表、代次与光标落点。
+    fn install_visible(&mut self, visible: Option<Vec<usize>>, cx: &mut Context<Self>) {
+        let row_by_id = visible.as_ref().map(|rows| {
+            rows.iter()
+                .enumerate()
+                .filter_map(|(row, index)| {
+                    self.playlist
+                        .tracks()
+                        .get(*index)
+                        .map(|track| (track.id, row))
+                })
+                .collect()
+        });
+        self.visible = visible;
+        self.row_by_id = row_by_id;
+        self.visible_generation = self.visible_generation.wrapping_add(1);
 
         let still_visible = self.focus.is_some_and(|id| self.row_of(id).is_some());
         if !still_visible {

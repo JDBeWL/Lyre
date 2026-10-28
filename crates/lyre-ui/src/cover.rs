@@ -57,10 +57,29 @@ enum Slot {
 /// 缓存槽位的键：曲目内嵌封面按 `TrackId`，歌单封面按图片路径的哈希（借 `TrackId::from_path`）。
 /// 两者必须是不同变体，否则给歌单设封面可能命中某首曲目的图。档位也是键的一部分。
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-enum CoverKey {
+pub enum CoverKey {
     Track(TrackId, u32),
     File(TrackId, u32),
 }
+
+impl CoverKey {
+    /// 这张图代表哪首曲目 / 哪个图片文件。视图用它在封面完成时判断要不要重绘。
+    pub fn track_id(self) -> TrackId {
+        match self {
+            Self::Track(id, _) | Self::File(id, _) => id,
+        }
+    }
+}
+
+/// 封面缓存的事件。整页 observe 会在每张图解码完成后触发，首页与搜索页改为只看自己等的那几张。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CoverCacheEvent {
+    Ready(CoverKey),
+    /// 有图被预算淘汰，依赖它的视图要重绘并重新请求。
+    Evicted,
+}
+
+impl EventEmitter<CoverCacheEvent> for CoverCache {}
 
 pub struct CoverCache {
     slots: HashMap<CoverKey, Slot>,
@@ -158,9 +177,16 @@ impl CoverCache {
             this.update(cx, |cache, cx| {
                 // 淘汰要一路做到显存：gpui 按 `ImageId` 把上传过的图钉在图集里，
                 // 不调 `drop_image` 就不释放
-                for evicted in cache.store_key(key, decoded) {
-                    cx.drop_image(evicted, None);
+                let evicted = cache.store_key(key, decoded);
+                let evicted_any = !evicted.is_empty();
+                for image in evicted {
+                    cx.drop_image(image, None);
                 }
+                cx.emit(CoverCacheEvent::Ready(key));
+                if evicted_any {
+                    cx.emit(CoverCacheEvent::Evicted);
+                }
+                // 仍保留整体通知：列表 / 侧栏等轻量视图照旧 observe，重活由首页与搜索页自行过滤。
                 cx.notify();
             })
             .ok();

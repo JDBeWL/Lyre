@@ -50,7 +50,7 @@ impl LibraryEntity {
         self.persist();
         self.scope = Scope::All;
         self.focus = None;
-        self.visible = None;
+        self.recompute_visible(cx);
         cx.notify();
         previous
     }

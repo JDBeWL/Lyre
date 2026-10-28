@@ -1,5 +1,8 @@
 //! 多选模式下的批量操作条：出现在工具条与列头之间。
 
+use std::collections::HashSet;
+use std::rc::Rc;
+
 use lyre_core::{Collection, CollectionId, TrackId};
 
 use crate::common::button::{ButtonKind, text_button};
@@ -10,10 +13,13 @@ use crate::platform::*;
 use crate::theme;
 
 use super::TrackList;
+use super::selection::ordered_chosen;
 
 pub(super) struct BatchBar {
-    /// 已勾选的可见曲目。带 id 而不是只带数量：歌单项的 ✓ 要按这组 id 算
-    pub(super) chosen: Vec<TrackId>,
+    /// 已勾选的可见曲目数量；选择已在投影换代时清理过。
+    pub(super) chosen_count: usize,
+    /// 勾选集合，只有展开「加入歌单」菜单、需要逐项 ✓ 时才排序。
+    pub(super) selected: Rc<HashSet<TrackId>>,
     /// 可见行数，「全选」的提示用
     pub(super) rows: usize,
     /// 当前正看着哪个歌单 —— 决定给不给「从本歌单移出」
@@ -24,13 +30,13 @@ pub(super) struct BatchBar {
 
 pub(super) fn batch_bar(bar: BatchBar) -> impl IntoElement {
     let BatchBar {
-        chosen,
+        chosen_count,
+        selected,
         rows,
         collection,
         library,
         list,
     } = bar;
-    let chosen_count = chosen.len();
 
     let mut row = div()
         .flex_none()
@@ -93,6 +99,8 @@ pub(super) fn batch_bar(bar: BatchBar) -> impl IntoElement {
             move |menu, _window, cx| {
                 let lists: Vec<(CollectionId, String, bool)> = {
                     let read = library.read(cx);
+                    // 菜单真正打开时才生成有序 ID：渲染路径不该为了一次点击扫全表。
+                    let chosen = ordered_chosen(read, &selected);
                     read.collections()
                         .iter()
                         .map(|item| (item.id, item.name.clone(), all_inside(item, &chosen)))

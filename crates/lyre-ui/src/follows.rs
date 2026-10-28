@@ -25,9 +25,9 @@ impl Follows {
     /// 写回磁盘。失败只记日志，不影响调用方。
     pub fn save(&self) {
         // 集合无序，排序后写盘让文件在两次保存之间稳定。
-        let mut names: Vec<&String> = self.names.iter().collect();
+        let mut names: Vec<String> = self.names.iter().cloned().collect();
         names.sort_unstable();
-        persist::save_lossy(FILE, &names);
+        persist::save_lossy(FILE, names);
     }
 
     pub fn contains(&self, name: &str) -> bool {

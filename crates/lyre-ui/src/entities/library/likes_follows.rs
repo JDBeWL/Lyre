@@ -21,6 +21,7 @@ impl LibraryEntity {
     pub fn toggle_like(&mut self, id: TrackId, cx: &mut Context<Self>) -> bool {
         let now_liked = self.liked.toggle(id);
         self.liked.save();
+        self.touch_data();
         cx.notify();
         now_liked
     }
@@ -38,6 +39,7 @@ impl LibraryEntity {
     pub fn toggle_follow(&mut self, name: impl AsRef<str>, cx: &mut Context<Self>) -> bool {
         let now_following = self.followed.toggle(name.as_ref());
         self.followed.save();
+        self.touch_data();
         // 头图在 `RootView` 里内联渲染，只有事件能把它推重绘（见 [`LibraryEvent::FollowChanged`]）。
         cx.emit(LibraryEvent::FollowChanged);
         cx.notify();
@@ -51,6 +53,7 @@ impl LibraryEntity {
             return 0;
         }
         self.liked.save();
+        self.touch_data();
         cx.notify();
         added
     }
