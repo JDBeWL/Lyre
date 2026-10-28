@@ -477,6 +477,47 @@ fn asking_for_exclusive_without_a_backend_falls_back_and_says_so() {
 }
 
 #[test]
+fn dropping_one_clone_keeps_the_audio_thread_running() {
+    let (handle, rx, _state) = harness();
+    handle.send(PlayerCommand::Load {
+        path: PathBuf::from("/music/夢我夢中.flac"),
+        autoplay: true,
+    });
+    wait_for(&rx, |e| matches!(e, PlayerEvent::Loaded { .. })).expect("应当收到 Loaded");
+
+    let clone = handle.clone();
+    drop(handle);
+
+    // 克隆还在：命令必须照常被处理，不能被析构时顺带发的 Shutdown 提前关掉
+    clone.send(PlayerCommand::Pause);
+    wait_for(&rx, |e| {
+        matches!(e, PlayerEvent::State(PlaybackState::Paused))
+    })
+    .expect("丢一个克隆不该关掉音频线程");
+    clone.send(PlayerCommand::Play);
+    wait_for(&rx, |e| {
+        matches!(e, PlayerEvent::State(PlaybackState::Playing))
+    })
+    .expect("剩下的句柄应当还能继续播放");
+
+    drop(clone);
+
+    // 最后一个句柄走了，线程才收工、事件发送端才关闭
+    let deadline = Instant::now() + Duration::from_secs(3);
+    let mut disconnected = false;
+    while Instant::now() < deadline {
+        match rx.recv_timeout(Duration::from_millis(50)) {
+            Err(RecvTimeoutError::Disconnected) => {
+                disconnected = true;
+                break;
+            }
+            Err(RecvTimeoutError::Timeout) | Ok(_) => {}
+        }
+    }
+    assert!(disconnected, "最后一个句柄析构之后音频线程才该收工");
+}
+
+#[test]
 fn dropping_the_handle_shuts_the_thread_down() {
     let (handle, rx, _state) = harness();
     handle.send(PlayerCommand::Load {

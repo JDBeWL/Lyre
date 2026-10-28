@@ -7,7 +7,7 @@ use std::time::Duration;
 use lyre_audio_simd::PcmFormat;
 use wasapi::{
     AudioClient, AudioRenderClient, Device, DeviceEnumerator, Direction, Handle, SampleType,
-    StreamMode, WaveFormat, initialize_mta, make_simple_channelmask,
+    StreamMode, WasapiError, WaveFormat, initialize_mta, make_simple_channelmask,
 };
 
 use crate::error::{ExclusiveError, Result};
@@ -71,6 +71,31 @@ pub struct ExclusiveStream {
     /// 这条流真正落在哪台设备上（WASAPI endpoint ID，不含 host 前缀）。
     /// 选定设备已拔出时 `find_device` 会退回默认设备，所以它与请求的设备可能不是同一台。
     pub device_endpoint: String,
+}
+
+/// 渲染线程用到的设备操作。抽成 trait 是为了在用例里注入拔卡、设备被占用和写入失败，
+/// 真机路径仍由 [`ExclusiveStream`] 实现。
+pub(crate) trait RenderStream {
+    fn format(&self) -> ExclusiveFormat;
+    fn device_name(&self) -> &str;
+    fn device_endpoint(&self) -> &str;
+    fn start(&self) -> Result<()>;
+    fn stop(&self) -> Result<()>;
+    /// `Ok(true)` 是设备事件已触发，`Ok(false)` 是等到超时 —— 后者是正常轮询，不是故障。
+    fn wait_event(&self, timeout_ms: u32) -> Result<bool>;
+    fn available_frames(&self) -> Result<usize>;
+    fn write(&self, frames: usize, payload: &[u8]) -> Result<()>;
+}
+
+/// 渲染线程的开流工厂。拿到渲染线程上调用，保证 COM 对象只在创建它的线程里使用。
+pub(crate) type OpenStream =
+    Box<dyn FnMut(Option<&str>, Option<(u32, u16)>) -> Result<Box<dyn RenderStream>> + Send>;
+
+pub(crate) fn open_stream(
+    device: Option<&str>,
+    preferred: Option<(u32, u16)>,
+) -> Result<Box<dyn RenderStream>> {
+    ExclusiveStream::open(device, preferred).map(|stream| Box::new(stream) as Box<dyn RenderStream>)
 }
 
 impl ExclusiveStream {
@@ -157,6 +182,53 @@ impl ExclusiveStream {
         Err(ExclusiveError::Unsupported(format!(
             "{device_name} 上找不到可用的独占格式（{last_error}）"
         )))
+    }
+}
+
+impl RenderStream for ExclusiveStream {
+    fn format(&self) -> ExclusiveFormat {
+        self.format
+    }
+
+    fn device_name(&self) -> &str {
+        &self.device_name
+    }
+
+    fn device_endpoint(&self) -> &str {
+        &self.device_endpoint
+    }
+
+    fn start(&self) -> Result<()> {
+        self.client
+            .start_stream()
+            .map_err(|err| ExclusiveError::Initialize(format!("启动独占流失败：{err:?}")))
+    }
+
+    fn stop(&self) -> Result<()> {
+        self.client
+            .stop_stream()
+            .map_err(|err| ExclusiveError::Initialize(format!("停止独占流失败：{err:?}")))
+    }
+
+    fn wait_event(&self, timeout_ms: u32) -> Result<bool> {
+        match self.event.wait_for_event(timeout_ms) {
+            Ok(()) => Ok(true),
+            Err(WasapiError::EventTimeout) => Ok(false),
+            Err(err) => Err(ExclusiveError::Write(format!("等待设备事件失败：{err:?}"))),
+        }
+    }
+
+    fn available_frames(&self) -> Result<usize> {
+        self.client
+            .get_available_space_in_frames()
+            .map(|frames| frames as usize)
+            .map_err(|err| ExclusiveError::Write(format!("查询设备可用空间失败：{err:?}")))
+    }
+
+    fn write(&self, frames: usize, payload: &[u8]) -> Result<()> {
+        self.render
+            .write_to_device(frames, payload, None)
+            .map_err(|err| ExclusiveError::Write(format!("写入设备失败：{err:?}")))
     }
 }
 

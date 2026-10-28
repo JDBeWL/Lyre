@@ -4,7 +4,7 @@ use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender};
 use std::time::Duration;
 
 use crate::ExclusiveOpenFn;
-use crate::backend::AudioBackend;
+use crate::backend::{AudioBackend, BackendNotice};
 use crate::command::PlayerCommand;
 use crate::device::{self, AudioDeviceInfo};
 use crate::device_monitor::DeviceSignal;
@@ -79,7 +79,8 @@ struct AudioThread {
     default_id: Option<String>,
     /// 还没打开过时是 `None`。
     backend: Option<Box<dyn AudioBackend>>,
-    /// 打开失败后置真，避免每条命令都重试开设备刷屏；切换设备时复位。
+    /// 打开失败后置真，避免后台拍子反复重试开设备刷屏；
+    /// 用户显式播放 / 装载 / 切设备时复位。
     open_failed: bool,
     /// 本曲是否已经真正出声过 —— 用来区分「刚开始装载」和「播完了」
     seen_content: bool,
@@ -325,14 +326,15 @@ impl AudioThread {
                 self.seen_content = false;
                 self.ended_reported = false;
                 self.announce_output();
+                self.last_target = id.map(str::to_owned);
             }
             Some(Err(err)) => {
+                // 后端会回滚到旧设备接着播，记忆的目标也必须留在旧值上
                 let _ = self.events.send(PlayerEvent::Error(err.to_string()));
             }
             // 后端还没建起来：下次懒创建自然用新设备，此刻没有音源需要重置
-            None => {}
+            None => self.last_target = id.map(str::to_owned),
         }
-        self.last_target = id.map(str::to_owned);
     }
 
     fn select_device(&mut self, id: Option<String>) {
@@ -405,14 +407,14 @@ impl AudioThread {
             }
 
             PlayerCommand::Load { path, autoplay } => {
+                // 用户显式装载：上一次打不开不代表这次也不行，必须先给设备一次机会
+                self.open_failed = false;
                 let outcome = self.backend().map(|backend| backend.load(&path, autoplay));
 
                 let Some(outcome) = outcome else {
-                    // 设备打不开过一次之后 `backend()` 不再重试。这里必须抛出异常，
-                    // 否则 `PlaybackEntity::load` 乐观设成的播放状态会导致播放出错。
-                    let _ = self.events.send(PlayerEvent::Error(
-                        AudioError::DeviceOpen("音频设备不可用".to_owned()).to_string(),
-                    ));
+                    // `backend()` 已经上报了具体原因（并把快照退回 Idle），这里只把状态同步给界面，
+                    // 否则 `PlaybackEntity::load` 乐观设成的播放状态会一直挂着
+                    self.emit_state();
                     return;
                 };
 
@@ -442,6 +444,8 @@ impl AudioThread {
             }
 
             PlayerCommand::Play => {
+                // 显式播放是用户对「设备现在能用了」的重试机会
+                self.open_failed = false;
                 match self.backend().map(AudioBackend::play) {
                     Some(Ok(())) => {
                         // 刚 append 的音源在头几毫秒里 empty() 仍为 true，两个标记都得清掉，
@@ -520,15 +524,37 @@ impl AudioThread {
 
     /// 每 50ms 一次刷新进度快照，并检测自然播放结束。
     fn tick(&mut self) {
-        // 淡出、挂起的交接这类收尾要等时间，靠这一拍推着走
-        let probe = self.backend.as_deref_mut().map(|backend| {
-            backend.tick();
-            (backend.position(), backend.is_finished())
-        });
-
-        let Some((position, finished)) = probe else {
+        let Some(backend) = self.backend.as_deref_mut() else {
             return;
         };
+        // 淡出、挂起的交接这类收尾要等时间，靠这一拍推着走；设备失联的恢复也在这里推进
+        backend.tick();
+        let notices: Vec<BackendNotice> = std::iter::from_fn(|| backend.take_notice()).collect();
+        let (position, finished) = (backend.position(), backend.is_finished());
+
+        for notice in notices {
+            match notice {
+                BackendNotice::Lost(err) => {
+                    let _ = self.events.send(PlayerEvent::Error(err.to_string()));
+                    if self.snapshot.state().is_playing() {
+                        self.snapshot.set_state(PlaybackState::Paused);
+                    }
+                    // 界面收到 Error 会先把状态显示成 Idle；这里把音频线程的真实状态补发一次
+                    self.emit_state();
+                    // 流已经断了，不能再把下一拍的空缓冲判成自然播完
+                    self.seen_content = false;
+                    self.ended_reported = true;
+                }
+                BackendNotice::Resumed => {
+                    // 后端从断流里自己恢复了：状态和输出口径都重新播报一遍
+                    self.seen_content = false;
+                    self.ended_reported = false;
+                    self.snapshot.set_state(PlaybackState::Playing);
+                    self.emit_state();
+                    self.announce_output();
+                }
+            }
+        }
 
         self.snapshot.set_position(position);
 
@@ -553,8 +579,213 @@ impl AudioThread {
 
 #[cfg(test)]
 mod tests {
-    use super::AudioThread;
+    use std::collections::VecDeque;
+    use std::path::Path;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Arc, Mutex, mpsc};
+    use std::time::Duration;
+
+    use super::{AudioThread, OpenFn};
+    use crate::backend::{AudioBackend, BackendNotice};
+    use crate::command::PlayerCommand;
     use crate::device::AudioDeviceInfo;
+    use crate::error::{AudioError, Result};
+    use crate::event::{OutputMode, PlaybackState, PlayerEvent};
+    use crate::snapshot::Snapshot;
+
+    struct NullBackend;
+
+    impl AudioBackend for NullBackend {
+        fn load(&mut self, _path: &Path, _autoplay: bool) -> Result<Duration> {
+            Ok(Duration::from_secs(60))
+        }
+
+        fn play(&mut self) -> Result<()> {
+            Ok(())
+        }
+
+        fn pause(&mut self) {}
+
+        fn stop(&mut self) {}
+
+        fn seek(&mut self, _position: Duration) -> Result<()> {
+            Ok(())
+        }
+
+        fn set_volume(&mut self, _volume: f32) {}
+
+        fn position(&self) -> Duration {
+            Duration::ZERO
+        }
+
+        fn is_finished(&self) -> bool {
+            false
+        }
+
+        fn set_device(&mut self, _device: Option<&str>) -> Result<()> {
+            Err(AudioError::DeviceOpen("switch failed".to_owned()))
+        }
+    }
+
+    /// 由用例直接塞通知的后端；`is_finished` 恒真，用来验证断流不会被误判成播完。
+    struct NoticeBackend {
+        notices: Arc<Mutex<VecDeque<BackendNotice>>>,
+    }
+
+    impl AudioBackend for NoticeBackend {
+        fn load(&mut self, _path: &Path, _autoplay: bool) -> Result<Duration> {
+            Ok(Duration::ZERO)
+        }
+
+        fn play(&mut self) -> Result<()> {
+            Ok(())
+        }
+
+        fn pause(&mut self) {}
+
+        fn stop(&mut self) {}
+
+        fn seek(&mut self, _position: Duration) -> Result<()> {
+            Ok(())
+        }
+
+        fn set_volume(&mut self, _volume: f32) {}
+
+        fn position(&self) -> Duration {
+            Duration::from_secs(5)
+        }
+
+        fn is_finished(&self) -> bool {
+            true
+        }
+
+        fn take_notice(&mut self) -> Option<BackendNotice> {
+            self.notices.lock().expect("notices lock").pop_front()
+        }
+    }
+
+    fn thread(open: OpenFn) -> (AudioThread, mpsc::Receiver<PlayerEvent>, Arc<Snapshot>) {
+        let (events, events_rx) = mpsc::channel();
+        let snapshot = Arc::new(Snapshot::default());
+        let thread = AudioThread {
+            events,
+            snapshot: Arc::clone(&snapshot),
+            open,
+            open_exclusive: None,
+            output_mode: OutputMode::Shared,
+            current: None,
+            device: None,
+            last_target: None,
+            default_id: None,
+            backend: None,
+            open_failed: false,
+            seen_content: false,
+            ended_reported: false,
+            smooth_switch: false,
+        };
+        (thread, events_rx, snapshot)
+    }
+
+    #[test]
+    fn an_explicit_play_retries_a_device_that_failed_to_open() {
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let opened = Arc::clone(&attempts);
+        let (mut thread, events, snapshot) = thread(Box::new(move |_| {
+            if opened.fetch_add(1, Ordering::SeqCst) == 0 {
+                Err(AudioError::DeviceOpen("device busy".to_owned()))
+            } else {
+                Ok(Box::new(NullBackend) as Box<dyn AudioBackend>)
+            }
+        }));
+
+        thread.handle(PlayerCommand::Play);
+        assert_eq!(
+            snapshot.state(),
+            PlaybackState::Idle,
+            "第一次打不开只能退回 Idle"
+        );
+        assert!(
+            matches!(events.try_recv(), Ok(PlayerEvent::Error(_))),
+            "第一次失败要上报"
+        );
+        assert_eq!(attempts.load(Ordering::SeqCst), 1);
+
+        // 设备可能只是被别的程序临时占着：用户再点一次播放必须真的重试，而不是被 open_failed 挡住
+        thread.handle(PlayerCommand::Play);
+        assert_eq!(
+            attempts.load(Ordering::SeqCst),
+            2,
+            "显式播放必须重新尝试开设备"
+        );
+        assert_eq!(
+            snapshot.state(),
+            PlaybackState::Playing,
+            "设备恢复后应当能播"
+        );
+    }
+
+    #[test]
+    fn a_failed_device_switch_does_not_move_the_remembered_target() {
+        let (mut thread, _events, _snapshot) = thread(Box::new(|_| {
+            Ok(Box::new(NullBackend) as Box<dyn AudioBackend>)
+        }));
+        thread.handle(PlayerCommand::Play);
+        thread.last_target = Some("old".to_owned());
+
+        thread.handle(PlayerCommand::SetDevice { id: None });
+
+        assert_eq!(
+            thread.last_target.as_deref(),
+            Some("old"),
+            "切换失败时后端已经回滚到旧设备，记忆的目标不能跟着变"
+        );
+    }
+
+    #[test]
+    fn a_lost_stream_parks_playback_until_the_backend_resumes() {
+        let notices = Arc::new(Mutex::new(VecDeque::new()));
+        let (mut thread, events, snapshot) = thread(Box::new(|_| {
+            Err(AudioError::DeviceOpen("这条用例不靠工厂开口".to_owned()))
+        }));
+        thread.backend = Some(Box::new(NoticeBackend {
+            notices: Arc::clone(&notices),
+        }));
+        snapshot.set_state(PlaybackState::Playing);
+
+        notices
+            .lock()
+            .expect("notices lock")
+            .push_back(BackendNotice::Lost(AudioError::Exclusive(
+                "独占输出中断：测试".to_owned(),
+            )));
+        thread.tick();
+
+        assert_eq!(
+            snapshot.state(),
+            PlaybackState::Paused,
+            "流断了就不能继续显示播放中"
+        );
+        assert!(snapshot.position() > Duration::ZERO, "位置不能被打回零");
+        assert!(matches!(events.try_recv(), Ok(PlayerEvent::Error(_))));
+        assert!(matches!(
+            events.try_recv(),
+            Ok(PlayerEvent::State(PlaybackState::Paused))
+        ));
+        // 后端此刻报 is_finished，但流是断的，不能顺手报 Ended
+        assert!(matches!(events.try_recv(), Err(mpsc::TryRecvError::Empty)));
+
+        notices
+            .lock()
+            .expect("notices lock")
+            .push_back(BackendNotice::Resumed);
+        thread.tick();
+
+        assert_eq!(
+            snapshot.state(),
+            PlaybackState::Playing,
+            "后端自行重建并续播之后，状态要跟回来"
+        );
+    }
 
     fn device(id: &str, is_default: bool) -> AudioDeviceInfo {
         AudioDeviceInfo {

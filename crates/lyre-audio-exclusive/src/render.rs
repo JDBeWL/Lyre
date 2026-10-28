@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 use crossbeam_channel::{Receiver, Sender};
 use lyre_audio_simd::PcmFormat;
 
-use crate::device::{ExclusiveFormat, ExclusiveStream};
+use crate::device::{ExclusiveFormat, OpenStream, RenderStream};
 use crate::ring::RingReader;
 
 /// 等待设备事件的最长时间。命令也靠这一拍轮询，所以不能取太长。
@@ -59,6 +59,10 @@ pub enum RenderResponse {
         device_endpoint: String,
     },
     Failed(String),
+    /// 已经建立的流中途失效（拔卡、驱动复位、写入失败）。控制线程据此退避重建。
+    DeviceLost {
+        message: String,
+    },
 }
 
 /// 渲染线程与控制线程共享的几个标志。
@@ -124,6 +128,7 @@ pub fn run(
     responses: Sender<RenderResponse>,
     reader: RingReader,
     shared: RenderShared,
+    open: OpenStream,
 ) {
     let mut renderer = Renderer {
         reader,
@@ -138,6 +143,8 @@ pub fn run(
         samples: Vec::with_capacity(MAX_CHUNK_SAMPLES),
         bytes: Vec::with_capacity(MAX_CHUNK_SAMPLES * 4),
         underrun: Underrun::new(),
+        open,
+        responses: responses.clone(),
     };
 
     log::info!("独占输出渲染线程已启动");
@@ -150,7 +157,7 @@ pub fn run(
                     shutting_down = true;
                     break;
                 }
-                other => renderer.handle(other, &responses),
+                other => renderer.handle(other),
             }
         }
         if shutting_down {
@@ -173,7 +180,7 @@ pub fn run(
 
 struct Renderer {
     reader: RingReader,
-    stream: Option<ExclusiveStream>,
+    stream: Option<Box<dyn RenderStream>>,
     format: Option<ExclusiveFormat>,
     volume: f32,
     fade: Fade,
@@ -186,10 +193,12 @@ struct Renderer {
     samples: Vec<f32>,
     bytes: Vec<u8>,
     underrun: Underrun,
+    open: OpenStream,
+    responses: Sender<RenderResponse>,
 }
 
 impl Renderer {
-    fn handle(&mut self, command: RenderCommand, responses: &Sender<RenderResponse>) {
+    fn handle(&mut self, command: RenderCommand) {
         match command {
             RenderCommand::Shutdown => {}
 
@@ -198,14 +207,15 @@ impl Renderer {
                 // 顺序错了表现为「初始化超时」，而不是什么好懂的报错。
                 self.stop_stream();
                 self.stream = None;
+                self.drain_deadline = None;
                 self.release_deadline = None;
 
-                let opened = ExclusiveStream::open(device.as_deref(), preferred);
+                let opened = (self.open)(device.as_deref(), preferred);
                 let reply = match opened {
                     Ok(stream) => {
-                        let format = stream.format;
-                        let device_name = stream.device_name.clone();
-                        let device_endpoint = stream.device_endpoint.clone();
+                        let format = stream.format();
+                        let device_name = stream.device_name().to_owned();
+                        let device_endpoint = stream.device_endpoint().to_owned();
                         self.format = Some(format);
                         self.stream = Some(stream);
                         // 新设备上重新起播时从头淡入，别带着上一台的增益
@@ -217,9 +227,12 @@ impl Renderer {
                             device_endpoint,
                         }
                     }
-                    Err(err) => RenderResponse::Failed(err.to_string()),
+                    Err(err) => {
+                        self.format = None;
+                        RenderResponse::Failed(err.to_string())
+                    }
                 };
-                let _ = responses.send(reply);
+                let _ = self.responses.send(reply);
             }
 
             RenderCommand::Start => self.start(),
@@ -247,13 +260,15 @@ impl Renderer {
     fn start(&mut self) {
         // 新曲子来了：宽限作废，这一首接在还开着的那条流上（若上一首刚放完，流还没放掉）
         self.release_deadline = None;
-        let Some(stream) = self.stream.as_ref() else {
-            return;
-        };
         if self.playing {
             return;
         }
-        if stream.client.start_stream().is_err() {
+        let Some(stream) = self.stream.as_ref() else {
+            return;
+        };
+        let started = stream.start();
+        if let Err(err) = started {
+            self.fail_stream(format!("启动独占流失败：{err}"));
             return;
         }
         self.shared.stream_starts.fetch_add(1, Ordering::Relaxed);
@@ -293,28 +308,57 @@ impl Renderer {
 
     fn stop_stream(&mut self) {
         if let Some(stream) = self.stream.as_ref() {
-            let _ = stream.client.stop_stream();
+            let _ = stream.stop();
         }
         self.playing = false;
     }
 
+    /// 设备操作失败：停掉这条流并让控制线程知道。
+    /// `playing` 必须同步置假，否则外层循环会立刻再次 `pump`，在死设备上空转。
+    fn fail_stream(&mut self, message: String) {
+        log::warn!("独占输出中断：{message}");
+        self.stop_stream();
+        self.stream = None;
+        self.format = None;
+        self.drain_deadline = None;
+        self.release_deadline = None;
+        let _ = self.responses.send(RenderResponse::DeviceLost { message });
+    }
+
     /// 等一次设备事件，把缓冲里的空间填满。
     fn pump(&mut self) {
-        let Some(stream) = self.stream.as_ref() else {
-            return;
-        };
         let Some(format) = self.format else {
             return;
         };
-        if stream.event.wait_for_event(EVENT_TIMEOUT_MS).is_err() {
+        if self.stream.is_none() {
             return;
         }
-        let Ok(available) = stream.client.get_available_space_in_frames() else {
-            return;
+
+        // 先区分「等到超时」和「设备报错」：超时是正常轮询，不能当成流失效
+        let waited = self
+            .stream
+            .as_ref()
+            .map(|stream| stream.wait_event(EVENT_TIMEOUT_MS));
+        match waited {
+            Some(Ok(true)) => {}
+            Some(Ok(false)) | None => return,
+            Some(Err(err)) => {
+                self.fail_stream(format!("等待设备事件失败：{err}"));
+                return;
+            }
+        }
+
+        let available = match self.stream.as_ref().map(|stream| stream.available_frames()) {
+            Some(Ok(frames)) => frames,
+            Some(Err(err)) => {
+                self.fail_stream(format!("查询设备空间失败：{err}"));
+                return;
+            }
+            None => return,
         };
 
         let channels = usize::from(format.channels.max(1));
-        let frames = (available as usize).min(MAX_CHUNK_SAMPLES / channels);
+        let frames = available.min(MAX_CHUNK_SAMPLES / channels);
         if frames == 0 {
             return;
         }
@@ -342,22 +386,25 @@ impl Renderer {
             }
         }
 
-        let payload: &[u8] = if format.samples == PcmFormat::F32 {
-            // 零拷贝：f32 的内存布局就是设备要的字节布局
-            lyre_audio_simd::f32_as_bytes(&self.samples)
-        } else {
-            lyre_audio_simd::write(&self.samples, format.samples, &mut self.bytes);
-            &self.bytes
+        let written = {
+            let payload: &[u8] = if format.samples == PcmFormat::F32 {
+                // 零拷贝：f32 的内存布局就是设备要的字节布局
+                lyre_audio_simd::f32_as_bytes(&self.samples)
+            } else {
+                lyre_audio_simd::write(&self.samples, format.samples, &mut self.bytes);
+                &self.bytes
+            };
+            self.stream
+                .as_ref()
+                .map(|stream| stream.write(frames, payload))
         };
-
-        if stream
-            .render
-            .write_to_device(frames, payload, None)
-            .is_err()
-        {
-            log::warn!("独占输出写入设备失败，停流");
-            self.stop_stream();
-            return;
+        match written {
+            Some(Ok(())) => {}
+            Some(Err(err)) => {
+                self.fail_stream(format!("写入设备失败：{err}"));
+                return;
+            }
+            None => return,
         }
         // 只把有效音频算进播放位置：收工后写进去的是撑住设备的静音，
         // 跟着它跑会让拿不到时长的曲目（Matroska 之类）放完后进度条继续爬。
@@ -504,7 +551,232 @@ impl Underrun {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Mutex;
+
     use super::*;
+    use crate::device::{OpenStream, RenderStream};
+    use crate::test_support::{FakeControl, FakeStream};
+
+    type Controls = Arc<Mutex<Vec<Arc<FakeControl>>>>;
+
+    fn opener(controls: Controls) -> OpenStream {
+        Box::new(move |_, _| {
+            let control = Arc::new(FakeControl::default());
+            controls
+                .lock()
+                .expect("controls lock")
+                .push(Arc::clone(&control));
+            Ok(Box::new(FakeStream { control }) as Box<dyn RenderStream>)
+        })
+    }
+
+    fn renderer(open: OpenStream) -> (Renderer, Receiver<RenderResponse>) {
+        let (_ring, _writer, reader) = crate::ring::SampleRing::new();
+        let (responses, response_rx) = crossbeam_channel::bounded(8);
+        let renderer = Renderer {
+            reader,
+            stream: None,
+            format: None,
+            volume: 1.0,
+            fade: Fade::idle(),
+            playing: false,
+            drain_deadline: None,
+            release_deadline: None,
+            shared: RenderShared::new(),
+            samples: Vec::with_capacity(MAX_CHUNK_SAMPLES),
+            bytes: Vec::with_capacity(MAX_CHUNK_SAMPLES * 4),
+            underrun: Underrun::new(),
+            open,
+            responses,
+        };
+        (renderer, response_rx)
+    }
+
+    fn configured() -> (Renderer, Receiver<RenderResponse>, Controls) {
+        let controls = Arc::new(Mutex::new(Vec::new()));
+        let (mut renderer, responses) = renderer(opener(Arc::clone(&controls)));
+        renderer.handle(RenderCommand::Configure {
+            device: None,
+            preferred: None,
+        });
+        assert!(matches!(
+            responses.recv_timeout(Duration::from_secs(1)),
+            Ok(RenderResponse::Configured { .. })
+        ));
+        renderer.handle(RenderCommand::Start);
+        assert!(renderer.playing, "Start 之后应当进入播放");
+        (renderer, responses, controls)
+    }
+
+    fn control(controls: &Controls, index: usize) -> Arc<FakeControl> {
+        Arc::clone(&controls.lock().expect("controls lock")[index])
+    }
+
+    /// 5ms 等不到设备事件是正常轮询，不能把流打断。
+    #[test]
+    fn a_wait_timeout_is_not_treated_as_a_device_failure() {
+        let (mut renderer, responses, controls) = configured();
+        control(&controls, 0).timeout.store(true, Ordering::Relaxed);
+
+        renderer.pump();
+
+        assert!(renderer.playing, "超时只是这一拍没空间，流还好着");
+        assert!(renderer.stream.is_some());
+        assert!(responses.try_recv().is_err(), "超时不该上报故障");
+    }
+
+    #[test]
+    fn a_device_event_failure_stops_the_stream_and_reports_it() {
+        let (mut renderer, responses, controls) = configured();
+        let failed = control(&controls, 0);
+        failed.fail_wait.store(true, Ordering::Relaxed);
+
+        renderer.pump();
+
+        assert!(!renderer.playing, "流断了就不能继续假装在播");
+        assert!(renderer.stream.is_none());
+        match responses.recv_timeout(Duration::from_secs(1)) {
+            Ok(RenderResponse::DeviceLost { message }) => {
+                assert!(
+                    message.contains("等待设备事件失败"),
+                    "原因不能丢：{message}"
+                );
+            }
+            other => panic!("应当上报 DeviceLost，实际 {other:?}"),
+        }
+        assert_eq!(
+            failed.wait_calls.load(Ordering::Relaxed),
+            1,
+            "失败的流不该再被轮询"
+        );
+    }
+
+    #[test]
+    fn a_space_query_failure_stops_the_stream_and_reports_it() {
+        let (mut renderer, responses, controls) = configured();
+        control(&controls, 0)
+            .fail_space
+            .store(true, Ordering::Relaxed);
+
+        renderer.pump();
+
+        assert!(!renderer.playing);
+        assert!(renderer.stream.is_none());
+        match responses.recv_timeout(Duration::from_secs(1)) {
+            Ok(RenderResponse::DeviceLost { message }) => {
+                assert!(
+                    message.contains("查询设备空间失败"),
+                    "原因不能丢：{message}"
+                );
+            }
+            other => panic!("应当上报 DeviceLost，实际 {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_write_failure_stops_the_stream_and_reports_it() {
+        let (mut renderer, responses, controls) = configured();
+        control(&controls, 0)
+            .fail_write
+            .store(true, Ordering::Relaxed);
+
+        renderer.pump();
+
+        assert!(!renderer.playing);
+        assert!(renderer.stream.is_none());
+        match responses.recv_timeout(Duration::from_secs(1)) {
+            Ok(RenderResponse::DeviceLost { message }) => {
+                assert!(message.contains("写入设备失败"), "原因不能丢：{message}");
+            }
+            other => panic!("应当上报 DeviceLost，实际 {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_fresh_stream_resumes_after_a_device_failure() {
+        let (mut renderer, responses, controls) = configured();
+        control(&controls, 0)
+            .fail_write
+            .store(true, Ordering::Relaxed);
+        renderer.pump();
+        assert!(!renderer.playing);
+        assert!(matches!(
+            responses.recv_timeout(Duration::from_secs(1)),
+            Ok(RenderResponse::DeviceLost { .. })
+        ));
+
+        // 设备回来了：重新协商并起播，样本要重新往设备里写
+        renderer.handle(RenderCommand::Configure {
+            device: None,
+            preferred: None,
+        });
+        assert!(matches!(
+            responses.recv_timeout(Duration::from_secs(1)),
+            Ok(RenderResponse::Configured { .. })
+        ));
+        renderer.handle(RenderCommand::Start);
+        assert!(renderer.playing);
+
+        renderer.pump();
+        assert!(
+            renderer.shared.written.load(Ordering::SeqCst) > 0,
+            "新流应当重新写设备"
+        );
+    }
+
+    /// 设备已经死掉时，渲染循环必须停在下一次 `wait_event` 上，而不是空转刷 CPU。
+    #[test]
+    fn the_render_loop_does_not_spin_on_a_dead_device() {
+        let controls = Arc::new(Mutex::new(Vec::new()));
+        let (commands, command_rx) = crossbeam_channel::bounded(8);
+        let (responses, response_rx) = crossbeam_channel::bounded(8);
+        let (_ring, _writer, reader) = crate::ring::SampleRing::new();
+
+        let opener_controls = Arc::clone(&controls);
+        let open: OpenStream = Box::new(move |_, _| {
+            let control = Arc::new(FakeControl::default());
+            control.fail_wait.store(true, Ordering::Relaxed);
+            control.wait_delay_ms.store(1, Ordering::Relaxed);
+            opener_controls
+                .lock()
+                .expect("controls lock")
+                .push(Arc::clone(&control));
+            Ok(Box::new(FakeStream { control }) as Box<dyn RenderStream>)
+        });
+
+        let render_handle = std::thread::spawn(move || {
+            run(command_rx, responses, reader, RenderShared::new(), open);
+        });
+
+        commands
+            .send(RenderCommand::Configure {
+                device: None,
+                preferred: None,
+            })
+            .expect("渲染线程还在");
+        assert!(matches!(
+            response_rx.recv_timeout(Duration::from_secs(1)),
+            Ok(RenderResponse::Configured { .. })
+        ));
+        commands.send(RenderCommand::Start).expect("渲染线程还在");
+        assert!(matches!(
+            response_rx.recv_timeout(Duration::from_secs(1)),
+            Ok(RenderResponse::DeviceLost { .. })
+        ));
+
+        // 设备已经死了，这一段时间里不该再有任何设备操作
+        std::thread::sleep(Duration::from_millis(120));
+        assert_eq!(
+            control(&controls, 0).wait_calls.load(Ordering::Relaxed),
+            1,
+            "死设备被反复轮询就是热循环"
+        );
+
+        commands
+            .send(RenderCommand::Shutdown)
+            .expect("渲染线程还在");
+        render_handle.join().expect("渲染线程应当退出");
+    }
 
     #[test]
     fn a_fade_lands_exactly_on_its_target() {

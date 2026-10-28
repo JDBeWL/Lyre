@@ -1,7 +1,16 @@
 use std::path::Path;
 use std::time::Duration;
 
-use crate::error::Result;
+use crate::error::{AudioError, Result};
+
+/// 后端在运行中异步产生、需要音频线程改写播放状态的信号。
+#[derive(Debug)]
+pub enum BackendNotice {
+    /// 输出链路中途失效，后端已停止写设备并尝试自行恢复。
+    Lost(AudioError),
+    /// 链路已自行重建并继续播放；音频线程应当把状态改回「播放中」。
+    Resumed,
+}
 
 /// 音频后端的抽象边界。实现者可以是 `!Send` 的，只在音频线程内部构造和使用。
 pub trait AudioBackend: 'static {
@@ -43,6 +52,11 @@ pub trait AudioBackend: 'static {
 
     /// 每拍调用一次，让后端处理需要时间的收尾（淡出、挂起的交接）。
     fn tick(&mut self) {}
+
+    /// 取走一条运行期通知。设备中途失联这类事件无法从命令返回值里带出来，只能这样上浮。
+    fn take_notice(&mut self) -> Option<BackendNotice> {
+        None
+    }
 
     /// 后端对自己输出口径的描述，供界面展示。独占返回协商到的采样率/声道/位深，
     /// 共享模式返回空串 —— 那边口径由系统混音器决定，报出来也没意义。

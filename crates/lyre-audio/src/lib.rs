@@ -12,7 +12,7 @@ pub mod rodio_backend;
 pub mod snapshot;
 mod thread;
 
-pub use backend::AudioBackend;
+pub use backend::{AudioBackend, BackendNotice};
 pub use command::PlayerCommand;
 pub use decode::{LockFreeSource, SymphoniaDecoder, TrackDecoder, WhenEmpty};
 pub use device::AudioDeviceInfo;
@@ -36,8 +36,21 @@ pub type ExclusiveOpenFn = Box<dyn FnMut(Option<&str>) -> Result<Box<dyn AudioBa
 pub struct AudioHandle {
     tx: Sender<PlayerCommand>,
     snapshot: Arc<Snapshot>,
-    /// 与句柄同寿命：最后一个句柄析构时设备监视线程随之收工。
-    _monitor: Arc<DeviceMonitor>,
+    /// 所有克隆共享同一个 owner：只有最后一个句柄析构才会关线程。
+    _owner: Arc<OwnerGuard>,
+}
+
+/// 句柄族的生命周期。克隆之间共享它，最后一个析构时发 `Shutdown`；
+/// 设备监视线程也挂在这里，随 owner 一起收工。
+struct OwnerGuard {
+    tx: Sender<PlayerCommand>,
+    _monitor: DeviceMonitor,
+}
+
+impl Drop for OwnerGuard {
+    fn drop(&mut self) {
+        let _ = self.tx.send(PlayerCommand::Shutdown);
+    }
 }
 
 impl AudioHandle {
@@ -112,10 +125,15 @@ impl AudioHandle {
             })
             .map_err(AudioError::ThreadSpawn)?;
 
+        let owner = OwnerGuard {
+            tx: tx.clone(),
+            _monitor: DeviceMonitor::start(signals_tx),
+        };
+
         Ok(Self {
             tx,
             snapshot,
-            _monitor: Arc::new(DeviceMonitor::start(signals_tx)),
+            _owner: Arc::new(owner),
         })
     }
 
@@ -139,11 +157,5 @@ impl AudioHandle {
 
     pub fn volume(&self) -> f32 {
         self.snapshot.volume()
-    }
-}
-
-impl Drop for AudioHandle {
-    fn drop(&mut self) {
-        let _ = self.tx.send(PlayerCommand::Shutdown);
     }
 }

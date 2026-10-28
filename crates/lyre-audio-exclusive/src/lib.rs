@@ -416,3 +416,139 @@ mod hardware {
         drop(backend);
     }
 }
+
+/// 注入式测试设施：假设备流 + 不碰声卡的 WAV 素材。真机用例仍走 `hardware`。
+#[cfg(test)]
+pub(crate) mod test_support {
+    use std::path::{Path, PathBuf};
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+    use std::time::Duration;
+
+    use lyre_audio_simd::PcmFormat;
+
+    use crate::device::{ExclusiveFormat, RenderStream};
+    use crate::error::{ExclusiveError, Result};
+
+    /// 假流统一报的口径，与 [`silent_wav`] 的素材一致，免去重采样。
+    pub const FORMAT: ExclusiveFormat = ExclusiveFormat {
+        sample_rate: 44_100,
+        channels: 2,
+        samples: PcmFormat::F32,
+        block_align: 8,
+    };
+
+    /// 用例摆布假流行为的旋钮。流被渲染线程持有后，测试仍通过它注入故障。
+    pub struct FakeControl {
+        pub wait_calls: AtomicUsize,
+        pub write_calls: AtomicUsize,
+        pub fail_wait: AtomicBool,
+        pub fail_space: AtomicBool,
+        pub fail_write: AtomicBool,
+        /// 让下一次等待按「超时」返回，用来验证超时不会被当成设备故障。
+        pub timeout: AtomicBool,
+        /// 每次等事件的挂钟耗时；不为零时渲染线程不会把整首瞬间写完。
+        pub wait_delay_ms: AtomicU64,
+        pub available_frames: AtomicUsize,
+    }
+
+    impl Default for FakeControl {
+        fn default() -> Self {
+            Self {
+                wait_calls: AtomicUsize::new(0),
+                write_calls: AtomicUsize::new(0),
+                fail_wait: AtomicBool::new(false),
+                fail_space: AtomicBool::new(false),
+                fail_write: AtomicBool::new(false),
+                timeout: AtomicBool::new(false),
+                wait_delay_ms: AtomicU64::new(5),
+                available_frames: AtomicUsize::new(480),
+            }
+        }
+    }
+
+    pub struct FakeStream {
+        pub control: Arc<FakeControl>,
+    }
+
+    impl RenderStream for FakeStream {
+        fn format(&self) -> ExclusiveFormat {
+            FORMAT
+        }
+
+        fn device_name(&self) -> &'static str {
+            "Fake Device"
+        }
+
+        fn device_endpoint(&self) -> &'static str {
+            "fake-endpoint"
+        }
+
+        fn start(&self) -> Result<()> {
+            Ok(())
+        }
+
+        fn stop(&self) -> Result<()> {
+            Ok(())
+        }
+
+        fn wait_event(&self, _timeout_ms: u32) -> Result<bool> {
+            self.control.wait_calls.fetch_add(1, Ordering::Relaxed);
+            let delay = self.control.wait_delay_ms.load(Ordering::Relaxed);
+            if delay > 0 {
+                std::thread::sleep(Duration::from_millis(delay));
+            }
+            if self.control.timeout.load(Ordering::Relaxed) {
+                return Ok(false);
+            }
+            if self.control.fail_wait.load(Ordering::Relaxed) {
+                return Err(ExclusiveError::Write("fake wait failure".to_owned()));
+            }
+            Ok(true)
+        }
+
+        fn available_frames(&self) -> Result<usize> {
+            if self.control.fail_space.load(Ordering::Relaxed) {
+                return Err(ExclusiveError::Write("fake space failure".to_owned()));
+            }
+            Ok(self.control.available_frames.load(Ordering::Relaxed))
+        }
+
+        fn write(&self, _frames: usize, _payload: &[u8]) -> Result<()> {
+            self.control.write_calls.fetch_add(1, Ordering::Relaxed);
+            if self.control.fail_write.load(Ordering::Relaxed) {
+                return Err(ExclusiveError::Write("fake write failure".to_owned()));
+            }
+            Ok(())
+        }
+    }
+
+    /// 44.1k / 2ch / 16-bit 全零 WAV。只用来喂真实解码器。
+    pub fn silent_wav(dir: &Path, frames: usize) -> PathBuf {
+        let sample_rate: u32 = 44_100;
+        let channels: u16 = 2;
+        let bits: u16 = 16;
+        let block_align = channels * bits / 8;
+        let data_len = (frames * channels as usize * 2) as u32;
+
+        let mut bytes = Vec::with_capacity(44 + data_len as usize);
+        bytes.extend_from_slice(b"RIFF");
+        bytes.extend_from_slice(&(36 + data_len).to_le_bytes());
+        bytes.extend_from_slice(b"WAVE");
+        bytes.extend_from_slice(b"fmt ");
+        bytes.extend_from_slice(&16u32.to_le_bytes());
+        bytes.extend_from_slice(&1u16.to_le_bytes());
+        bytes.extend_from_slice(&channels.to_le_bytes());
+        bytes.extend_from_slice(&sample_rate.to_le_bytes());
+        bytes.extend_from_slice(&(sample_rate * u32::from(block_align)).to_le_bytes());
+        bytes.extend_from_slice(&block_align.to_le_bytes());
+        bytes.extend_from_slice(&bits.to_le_bytes());
+        bytes.extend_from_slice(b"data");
+        bytes.extend_from_slice(&data_len.to_le_bytes());
+        bytes.resize(44 + data_len as usize, 0);
+
+        let path = dir.join(format!("fake-silence-{frames}.wav"));
+        std::fs::write(&path, bytes).expect("写入测试 WAV 失败");
+        path
+    }
+}
