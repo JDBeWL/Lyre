@@ -10,9 +10,9 @@ members = [
 ]
 
 [workspace.package]
-version = "0.2.3"
+version = "0.2.4"
 edition = "2024"
-rust-version = "1.98.1"
+rust-version = "1.99.1"
 license = "MIT OR Apache-2.0"
 
 [workspace.dependencies]
@@ -26,10 +26,11 @@ serde_json = "1"
 walkdir = "2"
 
 # gpui-pre 是 Zed main 的快照分叉，为的是 gpui-component 的 Input（中文 IME）/Menu/Popover。
-# 必须使用 `=0.3.8`：gpui-component ，否则会解析出两份 gpui 而类型不匹配。
-gpui = { package = "gpui-pre", version = "=0.3.8" }
-gpui-platform = { package = "gpui-pre-platform", version = "=0.3.8" }
-gpui-component = "0.7.1"
+# 必须与 gpui-component 0.8.1 钉的 gpui-pre 版本一致（`=0.3.10`），
+# 否则会解析出两份 gpui 而类型不匹配。
+gpui = { package = "gpui-pre", version = "=0.3.10" }
+gpui-platform = { package = "gpui-pre-platform", version = "=0.3.10" }
+gpui-component = "0.8.1"
 
 # 各 crate 用 `[lints] workspace = true` 继承。`[workspace.lints]` 不作用于 vendor/ 下的补丁包。
 [workspace.lints.rust]
@@ -63,6 +64,8 @@ wildcard_imports = "allow"
 too_many_lines = "allow"
 must_use_candidate = "allow"
 return_self_not_must_use = "allow"
+# 测试里 `assert!(v.is_empty())` 比 `assert_eq!(v, [])` 更直观，失败信息也够定位
+assert_is_empty = "allow"
 
 # GPUI 的渲染管线在纯 debug 下交互明显发滞，依赖统一开 opt-level=2。
 [profile.dev.package."*"]

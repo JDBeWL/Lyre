@@ -1,6 +1,6 @@
 # gpui-pre-windows 本地补丁
 
-这个目录是 `gpui-pre-windows 0.3.8` 的 vendored 副本（上游 = `zed@279fe07` 快照），由根
+这个目录是 `gpui-pre-windows 0.3.10` 的 vendored 副本（上游 = `zed@08cbb88` 快照），由根
 `Cargo.toml` 的 `[patch.crates-io]` 指过来。
 
 **为什么补**：上游对无标题栏窗口只注册了顶边的缩放热区，左 / 右 / 下三边没有原生缩放能力。

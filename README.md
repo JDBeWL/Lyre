@@ -17,8 +17,8 @@
 
 ## 技术栈
 
-- **语言**：Rust edition 2024，MSRV 1.98.1
-- **UI**：`gpui-pre` 0.3.8（Zed main 的快照分叉）+ `gpui-component` 0.7.1（输入框 / 菜单 / 浮层）
+- **语言**：Rust edition 2024，MSRV 1.99.1
+- **UI**：`gpui-pre` 0.3.10（Zed main 的快照分叉）+ `gpui-component` 0.8.1（输入框 / 菜单 / 浮层）
 - **音频输出**：`rodio` + `cpal`
 - **解码**：`symphonia` 0.6 全格式
 - **标签**：`lofty`；`.lrc` 的编码嗅探用 `encoding_rs`
@@ -46,7 +46,7 @@
 
 ## 快速上手开发
 
-需要 Rust 1.98.1 以上。首次构建要编译整棵 GPUI 依赖树（888 个包），几分钟后增量很快。
+需要 Rust 1.99.1 以上。首次构建要编译整棵 GPUI 依赖树（832 个包），几分钟后增量很快。
 
 ```bash
 cargo run -p lyre-app                # 启动

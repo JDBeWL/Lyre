@@ -167,7 +167,7 @@ mod hardware {
 
         let opened = match config.sample_format() {
             rodio::cpal::SampleFormat::F32 => device.build_output_stream(
-                &config.into(),
+                config.into(),
                 |data: &mut [f32], _: &_| data.fill(0.0),
                 |err| eprintln!("共享流错误：{err}"),
                 None,

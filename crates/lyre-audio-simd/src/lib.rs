@@ -290,7 +290,7 @@ mod tests {
             write(&samples, PcmFormat::F32, &mut written);
             assert_eq!(f32_as_bytes(&samples), written.as_slice());
         }
-        assert!(f32_as_bytes(&[]).is_empty());
+        assert_eq!(f32_as_bytes(&[]), []);
     }
 
     /// 容差 1 LSB：SIMD 就近取偶、标量就近取远，差只出现在半整数上。

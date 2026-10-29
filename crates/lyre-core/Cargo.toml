@@ -10,12 +10,12 @@ description = "Domain model for Lyre: tracks, playlists and directory scanning. 
 serde = { workspace = true }
 thiserror = { workspace = true }
 walkdir = { workspace = true }
-lofty = "0.24"
+lofty = "0.25"
 # 只服务于 `.lrc`：中文发行里 GBK/GB18030 编码的歌词文件仍常见
 encoding_rs = "0.8"
 
 [dev-dependencies]
-criterion = { version = "0.5", features = ["html_reports"] }
+criterion = { version = "0.8", features = ["html_reports"] }
 
 [[bench]]
 name = "group"

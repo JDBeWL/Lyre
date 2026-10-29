@@ -13,7 +13,7 @@ pub enum CoreError {
     Tag {
         path: PathBuf,
         #[source]
-        source: lofty::error::LoftyError,
+        source: lofty::error::FileParseError,
     },
 }
 
