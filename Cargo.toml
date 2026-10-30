@@ -10,7 +10,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.2.6"
+version = "0.2.7"
 edition = "2024"
 rust-version = "1.99.1"
 license = "MIT OR Apache-2.0"
@@ -61,16 +61,19 @@ must_use_candidate = "allow"
 return_self_not_must_use = "allow"
 assert_is_empty = "allow"
 
-# GPUI 的渲染管线在纯 debug 下交互明显发滞，依赖统一开 opt-level=2。
+# GPUI 的渲染管线在纯 debug 下交互明显发滞，依赖统一开 opt-level=2；依赖不生成调试信息，
+# 冷编译的时间和 rustc 峰值内存有相当一部分花在调试信息上，自己的 crate 仍保留。
 [profile.dev.package."*"]
 opt-level = 2
+debug = false
 
 [profile.dev]
 opt-level = 1
 
 [profile.release]
-lto = "thin"
+lto = "fat"
 codegen-units = 1
+panic = "abort"
 strip = true
 
 # vendor 的 gpui-pre-windows 补齐无标题栏窗口四边四角的缩放热区；改动与重做步骤见 `vendor/gpui-pre-windows/PATCH.md`。

@@ -25,7 +25,8 @@ pub(super) fn column_header(env: &RowEnv, trailing: Option<AnyElement>) -> impl 
         .h(px(theme::COLUMN_HEADER_H))
         .flex()
         .items_center()
-        .px(px(theme::GAP_MD))
+        .pl(px(theme::ROW_PAD_LEFT))
+        .pr(px(theme::GAP_MD))
         .border_b_1()
         .border_color(theme::border_soft())
         .text_size(px(theme::FONT_CAPTION))
@@ -153,7 +154,8 @@ pub(super) fn row(
         .min_w_0()
         .flex()
         .items_center()
-        .px(px(theme::GAP_MD))
+        .pl(px(theme::ROW_PAD_LEFT))
+        .pr(px(theme::GAP_MD))
         .bg(state.background());
 
     // 悬停底色只给空闲行：`hover` 比 `accent_soft` 与 `cursor` 都暗，叠上去会把播放行和光标行压暗
@@ -190,7 +192,7 @@ pub(super) fn row(
             .w(px(INDEX_W))
             .flex()
             .justify_end()
-            .pr(px(theme::GAP_SM))
+            .pr(px(theme::ROW_INDEX_GAP))
             .child(icon(Glyph::Music, 12., theme::accent_text()))
             .into_any_element()
     } else {
@@ -210,7 +212,7 @@ pub(super) fn row(
             .flex()
             .items_center()
             .justify_end()
-            .pr(px(theme::GAP_SM))
+            .pr(px(theme::ROW_INDEX_GAP))
             .cursor_pointer()
             // 点序号 = 播放这一首，与点标题同走 `activate`
             .on_click({
@@ -231,7 +233,7 @@ pub(super) fn row(
             .child(
                 div()
                     .absolute()
-                    .right(px(theme::GAP_SM))
+                    .right(px(theme::ROW_INDEX_GAP))
                     .top(relative(0.5))
                     .mt(px(-6.))
                     .size(px(12.))

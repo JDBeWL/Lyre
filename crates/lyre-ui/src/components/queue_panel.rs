@@ -21,7 +21,7 @@ const PLAYED_CONTEXT: usize = 5;
 /// 行高要容得下 14px 标题行 + 12px 副标题行，合计约 51。
 const ROW_H: f32 = theme::ROW_H_COMFORTABLE;
 
-const INDEX_W: f32 = 40.0;
+const INDEX_W: f32 = theme::ROW_INDEX_W;
 const DURATION_W: f32 = 48.0;
 
 const DIVIDER_H: f32 = 28.0;
@@ -31,7 +31,7 @@ pub struct QueuePanel {
     shell: Entity<ShellEntity>,
     _sub: Subscription,
     _shell_sub: Subscription,
-    scroll: UniformListScrollHandle,
+    scroll: ListState,
     // `observe(library)` 在任何曲库变化时都会触发，所以记住上次定位的曲目，
     // 只在正在播放的那首真的换了时才滚动，否则用户翻看队列时会被拽回当前曲。
     last_anchored: Option<TrackId>,
@@ -60,7 +60,7 @@ impl QueuePanel {
             shell,
             _sub: sub,
             _shell_sub: shell_sub,
-            scroll: UniformListScrollHandle::default(),
+            scroll: ListState::new(0, ListAlignment::Top, px(ROW_H * 4.0)),
             last_anchored: None,
             rows: QueueRows::default(),
             rows_key: None,
@@ -89,7 +89,33 @@ impl QueuePanel {
                 library.now_playing(),
             )
         };
-        self.rows = build_entries(played, upcoming, current);
+        let rows = build_entries(played, upcoming, current);
+        // 只把真正变化的区间交给列表重测，滚到别处时不会因为队尾增删被拉回顶部。
+        let splice = {
+            let old = &self.rows.entries;
+            let new = &rows.entries;
+            (old != new).then(|| {
+                let shared = old.len().min(new.len());
+                let prefix = old
+                    .iter()
+                    .zip(new.iter())
+                    .take_while(|(a, b)| a == b)
+                    .count();
+                let suffix = old
+                    .iter()
+                    .rev()
+                    .zip(new.iter().rev())
+                    .take(shared - prefix)
+                    .take_while(|(a, b)| a == b)
+                    .count();
+                (prefix..old.len() - suffix, new.len() - prefix - suffix)
+            })
+        };
+        if let Some((range, count)) = splice {
+            self.scroll.splice(range, count);
+            self.scroll = self.scroll.clone().with_uniform_item_height(px(ROW_H));
+        }
+        self.rows = rows;
         self.rows_key = Some(key);
     }
 
@@ -109,7 +135,7 @@ impl QueuePanel {
         // 分段标签还要再占一行。行号只能由 `build_entries` 给出。
         self.sync_rows(cx);
         if let Some(row) = self.rows.current_row {
-            self.scroll.scroll_to_item(row, ScrollStrategy::Nearest);
+            self.scroll.scroll_to_reveal_item(row);
         }
     }
 }
@@ -187,37 +213,24 @@ impl Render for QueuePanel {
         let body: AnyElement = if row_count == 0 {
             empty_queue(total)
         } else {
-            uniform_list("queue-list", row_count, move |range, _window, cx| {
-                // 只查可视区那几行，行模型本身只带 id；先拷出曲目再放开曲库读取，
-                // 行元素的回调还要可变借用 `cx`。
-                let visible = rows[range].to_vec();
-                let tracks: Vec<Option<Track>> = {
-                    let library = library_entity.read(cx);
-                    visible
-                        .iter()
-                        .map(|entry| match entry {
-                            QueueEntry::Track { id, .. } => library.playlist().by_id(*id).cloned(),
-                            QueueEntry::Divider(_) => None,
-                        })
-                        .collect()
+            list(self.scroll.clone(), move |ix, _window, cx| {
+                let Some(entry) = rows.get(ix) else {
+                    return div().into_any_element();
                 };
-                visible
-                    .iter()
-                    .zip(tracks)
-                    .filter_map(|(entry, track)| match (entry, track) {
-                        (QueueEntry::Track { kind, number, .. }, Some(track)) => Some(
-                            queue_row(*number, &track, *kind, &library_entity, cx)
+                match entry {
+                    QueueEntry::Track { id, kind, number } => {
+                        // 先拷出曲目再放开曲库读取，行元素的回调还要可变借用 `cx`。
+                        let track = library_entity.read(cx).playlist().by_id(*id).cloned();
+                        match track {
+                            Some(track) => queue_row(*number, &track, *kind, &library_entity, cx)
                                 .into_any_element(),
-                        ),
-                        (QueueEntry::Divider(label), _) => {
-                            Some(section_divider(label).into_any_element())
+                            None => div().into_any_element(),
                         }
-                        (QueueEntry::Track { .. }, None) => None,
-                    })
-                    .collect::<Vec<AnyElement>>()
+                    }
+                    QueueEntry::Divider(label) => section_divider(label).into_any_element(),
+                }
             })
             .size_full()
-            .track_scroll(&self.scroll)
             .into_any_element()
         };
 
@@ -250,7 +263,7 @@ impl Render for QueuePanel {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 enum QueueEntry {
     /// 一行曲目。`number` 是显示序号，按曲目数而不是行数递增 —— 分段标签占一行但不占号。
     Track {
@@ -488,7 +501,8 @@ fn queue_row(
         .h(px(ROW_H))
         .flex()
         .items_center()
-        .px(px(theme::GAP_MD))
+        .pl(px(theme::ROW_PAD_LEFT))
+        .pr(px(theme::GAP_MD))
         .cursor_pointer()
         .bg(if current {
             theme::accent_soft()
@@ -587,7 +601,7 @@ fn index_cell(
             .flex()
             .items_center()
             .justify_end()
-            .pr(px(theme::GAP_SM))
+            .pr(px(theme::ROW_INDEX_GAP))
             .child(icon(Glyph::Music, 12., theme::accent_text()))
             .into_any_element();
     }
@@ -600,7 +614,7 @@ fn index_cell(
         .flex()
         .items_center()
         .justify_end()
-        .pr(px(theme::GAP_SM))
+        .pr(px(theme::ROW_INDEX_GAP))
         .cursor_pointer()
         .on_click({
             let library = library.clone();
@@ -622,7 +636,7 @@ fn index_cell(
         .child(
             div()
                 .absolute()
-                .right(px(theme::GAP_SM))
+                .right(px(theme::ROW_INDEX_GAP))
                 .top(relative(0.5))
                 .mt(px(-6.))
                 .size(px(12.))

@@ -226,6 +226,12 @@ pub const ROW_H_COMPACT: f32 = 40.0;
 pub const ROW_H_COMFORTABLE: f32 = 52.0;
 /// 行首「光标在这」竖条的宽度。绝对定位，不占布局 —— 做成 flex 子元素会把整表列推歪。
 pub const ROW_CURSOR_BAR_W: f32 = 3.0;
+/// 行首索引列宽（序号 / 播放图标）。主列表与队列共用，两处左边距才不会各调各的。
+pub const ROW_INDEX_W: f32 = 36.0;
+/// 列表行与列头的左内边距；右侧仍用 [`GAP_MD`]，给时长和操作列留距离。
+pub const ROW_PAD_LEFT: f32 = 8.0;
+/// 行首编号 / 播放图标与右侧内容之间的间距。
+pub const ROW_INDEX_GAP: f32 = 16.0;
 pub const COLUMN_HEADER_H: f32 = 36.0;
 pub const SEARCH_H: f32 = 36.0;
 pub const SEARCH_W: f32 = 280.0;

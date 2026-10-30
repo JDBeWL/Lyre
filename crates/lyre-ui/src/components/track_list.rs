@@ -23,8 +23,7 @@ use crate::shell::{Breakpoint, NavSection, ShellEntity};
 use super::SearchPage;
 use super::detail::{self, HeroInfo};
 
-/// 要能放下两位数和 ♪ / ▶ 而不跳动。
-const INDEX_W: f32 = 40.0;
+const INDEX_W: f32 = crate::theme::ROW_INDEX_W;
 /// 拖拽手柄列宽：只在歌单作用域出现。
 const HANDLE_W: f32 = 26.0;
 /// 勾选列宽：只在多选模式出现。
