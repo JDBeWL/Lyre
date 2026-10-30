@@ -9,7 +9,10 @@ use crate::common::thousands;
 use crate::entities::LibraryEntity;
 use crate::icon::{Glyph, icon, icon_inherit};
 use crate::platform::*;
+use crate::shell::ShellEntity;
 use crate::theme;
+
+use super::panel_close_button;
 
 /// 已播只留 5 首作上下文，不属于队列本身。
 /// 这是显示上限，不是滚动锚点 —— 锚点是 `QueueRows::current_row`。
@@ -25,7 +28,9 @@ const DIVIDER_H: f32 = 28.0;
 
 pub struct QueuePanel {
     library: Entity<LibraryEntity>,
+    shell: Entity<ShellEntity>,
     _sub: Subscription,
+    _shell_sub: Subscription,
     scroll: UniformListScrollHandle,
     // `observe(library)` 在任何曲库变化时都会触发，所以记住上次定位的曲目，
     // 只在正在播放的那首真的换了时才滚动，否则用户翻看队列时会被拽回当前曲。
@@ -37,15 +42,24 @@ pub struct QueuePanel {
 }
 
 impl QueuePanel {
-    pub fn new(library: Entity<LibraryEntity>, cx: &mut Context<Self>) -> Self {
+    pub fn new(
+        library: Entity<LibraryEntity>,
+        shell: Entity<ShellEntity>,
+        cx: &mut Context<Self>,
+    ) -> Self {
         // 换曲和切模式都改变队列，所以 observe 整个曲库实体。
         let sub = cx.observe(&library, |this, library, cx| {
             this.anchor(&library, cx);
             cx.notify();
         });
+        // 浮层开关只改面板外观（关闭键显隐），但面板实体不是每次根视图重绘都会重渲染的部分，
+        // 必须自己订阅外壳。
+        let shell_sub = cx.observe(&shell, |_, _, cx| cx.notify());
         Self {
             library,
+            shell,
             _sub: sub,
+            _shell_sub: shell_sub,
             scroll: UniformListScrollHandle::default(),
             last_anchored: None,
             rows: QueueRows::default(),
@@ -106,6 +120,7 @@ impl Render for QueuePanel {
         let library = self.library.read(cx);
         let playing = library.now_playing();
         let mode = library.mode();
+        let overlay = self.shell.read(cx).right_panel_overlays();
         // 待播段不截断：整条队列都要能滚到，列表本身是虚拟化的，多几行不增加渲染成本。
         // 行模型已经缓存，这里只读一个数字。
         let ahead = self.rows.ahead;
@@ -139,7 +154,10 @@ impl Render for QueuePanel {
                     .text_color(theme::text_muted())
                     .child(thousands(total)),
             )
-            .child(mode_badge(mode));
+            .child(mode_badge(mode))
+            .when(overlay, |row| {
+                row.child(panel_close_button("queue-close", &self.shell))
+            });
 
         let summary = div()
             .flex_none()
@@ -514,7 +532,7 @@ fn queue_row(
             track_id,
             library,
         ))
-        .child(title_cell(track, title_color, meta_color));
+        .child(title_cell(number, track, title_color, meta_color));
 
     // 时长列固定宽度而不是 `flex_1`：后者的右边界取决于标题长度，会把这一列顶宽。
     let mut row = row.child(
@@ -621,7 +639,12 @@ fn index_cell(
 }
 
 /// 标题格：第一行歌名，第二行「艺术家 · 专辑」。
-fn title_cell(track: &Track, title_color: Rgba, meta_color: Rgba) -> impl IntoElement {
+fn title_cell(
+    number: usize,
+    track: &Track,
+    title_color: Rgba,
+    meta_color: Rgba,
+) -> impl IntoElement {
     let subtitle = track.subtitle();
 
     let title_line = div()
@@ -632,10 +655,12 @@ fn title_cell(track: &Track, title_color: Rgba, meta_color: Rgba) -> impl IntoEl
         .min_w_0()
         .child(
             div()
+                .id(("queue-title", number))
                 .min_w_0()
                 .truncate()
                 .text_size(px(theme::FONT_TRACK))
                 .text_color(title_color)
+                .tooltip(crate::common::tooltip::builder(track.title.clone()))
                 .child(track.title.clone()),
         );
 

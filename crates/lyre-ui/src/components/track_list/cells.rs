@@ -73,7 +73,7 @@ pub(super) fn title_cell(
     state: RowState,
     env: RowEnv,
     library: &Entity<LibraryEntity>,
-    list: WeakEntity<TrackList>,
+    list: &WeakEntity<TrackList>,
     covers: &Entity<CoverCache>,
     track_id: TrackId,
     cx: &mut App,
@@ -125,24 +125,20 @@ pub(super) fn title_cell(
         .min_w_0()
         .child(
             div()
+                .id(("track-title", index))
                 .min_w_0()
                 .flex_shrink(1.0)
                 .truncate()
                 .text_size(px(theme::FONT_TRACK))
                 .font_weight(state.title_weight())
                 .text_color(state.title_color())
+                // 只给标题文字挂提示：挂在整个标题格上会盖住下面的艺术家 / 专辑链接
+                .tooltip(crate::common::tooltip::builder(track.title.clone()))
                 .child(track.title.clone()),
         );
 
     if two_lines {
-        let segments = subtitle_segments(
-            index,
-            track.artist.clone(),
-            track.album.clone(),
-            env.kind,
-            library.clone(),
-            list,
-        );
+        let segments = artist_segments(index, track.artist.clone(), library, list);
         cell = cell.child(title_line).child(
             div()
                 .flex()
@@ -187,99 +183,62 @@ pub(super) fn title_cell(
         .child(cell)
 }
 
-/// 副标题里该出现的可点片段：`艺术家 · 专辑`。缺一边时退化成单段，分隔符只在两段都在时才出现。
-fn subtitle_segments(
+/// 副标题只放艺术家：多艺术家按 core 的分组口径拆开，每位各自可点。
+fn artist_segments(
     index: usize,
     artist: Option<String>,
-    album: Option<String>,
-    kind: ScopeKind,
-    library: Entity<LibraryEntity>,
-    list: WeakEntity<TrackList>,
+    library: &Entity<LibraryEntity>,
+    list: &WeakEntity<TrackList>,
 ) -> Vec<AnyElement> {
-    // 「未知艺术家 / 未知专辑」这类占位标签不可点，点进去是空作用域
-    let artist = artist.filter(|a| lyre_core::artist_key_str(Some(a)) != UNKNOWN_ARTIST);
-    let album = album.filter(|a| lyre_core::album_key_str(Some(a)) != UNKNOWN_ALBUM);
+    // 「未知艺术家」不可点，点进去是空作用域
+    let Some(name) = artist.filter(|a| lyre_core::artist_key_str(Some(a)) != UNKNOWN_ARTIST) else {
+        return Vec::new();
+    };
 
-    let (want_artist, want_album) = subtitle_parts(kind, artist.is_some(), album.is_some());
-    let artist = artist.filter(|_| want_artist);
-    let album = album.filter(|_| want_album);
-
-    let both = artist.is_some() && album.is_some();
     let mut out = Vec::new();
-
-    if let Some(name) = artist {
-        // 元素 id 必须逐行唯一（用行号而不是文字）：重复的纯文字 id 会让 gpui 复用前一个元素的命中区域。
-        // 文字照写整串（`甲/乙`），落点用拆分后的一位 —— 分组里没有整串，按它进作用域是空页
-        let target = lyre_core::artist_key_str(Some(&name)).to_owned();
-        out.push(subtitle_link(
-            format!("subtitle-artist-{index}"),
-            name.clone(),
-            SubtitleTarget::Artist(target),
+    for (position, part) in lyre_core::artist_keys_str(Some(&name))
+        .into_iter()
+        .enumerate()
+    {
+        if position > 0 {
+            out.push(artist_sep());
+        }
+        // 元素 id 必须逐行、逐人唯一：重复的 id 会让 gpui 复用前一个元素的命中区域。
+        out.push(artist_link(
+            format!("subtitle-artist-{index}-{position}"),
+            part.to_owned(),
             library.clone(),
             list.clone(),
         ));
-
-        if both {
-            out.push(subtitle_sep());
-        }
     }
-
-    if let Some(title) = album {
-        out.push(subtitle_link(
-            format!("subtitle-album-{index}"),
-            title.clone(),
-            SubtitleTarget::Album(title),
-            library,
-            list,
-        ));
-    }
-
     out
 }
 
 /// gpui 的鼠标事件会冒泡到标题格的 `on_click`，必须 `stop_propagation`，
 /// 否则一次点击既进详情又把这首送进播放器。
-fn subtitle_link(
+fn artist_link(
     id: String,
-    text: String,
-    target: SubtitleTarget,
+    name: String,
     library: Entity<LibraryEntity>,
     list: WeakEntity<TrackList>,
 ) -> AnyElement {
+    let target = name.clone();
     div()
         .id(SharedString::from(id))
         .min_w_0()
         .truncate()
         .cursor_pointer()
         .hover(|style| style.text_color(theme::text()).underline())
+        .tooltip(crate::common::tooltip::builder(name.clone()))
         .on_click(move |_, _, cx| {
             cx.stop_propagation();
             // 先记落点再收窄作用域，顺序不能反
             list.update(cx, |_, cx| cx.emit(TrackListEvent::RecordFromTrack))
                 .ok();
-            library.update(cx, |library, cx| match &target {
-                SubtitleTarget::Artist(name) => library.enter_artist(name.clone(), cx),
-                SubtitleTarget::Album(title) => library.enter_album(title.clone(), cx),
-            });
+            library.update(cx, |library, cx| library.enter_artist(target.clone(), cx));
         })
-        .child(text)
+        .child(name)
         .into_any_element()
-}
-
-/// 副标题片段点进去之后要去哪。
-#[derive(Clone)]
-enum SubtitleTarget {
-    Artist(String),
-    Album(String),
-}
-
-/// 副标题该显示哪些段：`(艺术家?, 专辑?)`。详情页里不重复页头已有的那段。
-fn subtitle_parts(kind: ScopeKind, has_artist: bool, has_album: bool) -> (bool, bool) {
-    match kind {
-        ScopeKind::All => (has_artist, has_album),
-        ScopeKind::Artist => (false, has_album),
-        ScopeKind::Album => (has_artist, false),
-    }
 }
 
 /// 专辑列的一格，可点进这张专辑的详情页。
@@ -310,6 +269,7 @@ pub(super) fn album_cell(
                 .truncate()
                 .cursor_pointer()
                 .hover(|style| style.text_color(theme::text()).underline())
+                .tooltip(crate::common::tooltip::builder(text.clone()))
                 .on_click(move |_, _, cx| {
                     list.update(cx, |_, cx| cx.emit(TrackListEvent::RecordFromTrack))
                         .ok();
@@ -323,8 +283,8 @@ pub(super) fn album_cell(
     cell.into_any_element()
 }
 
-fn subtitle_sep() -> AnyElement {
-    div().child(" · ").into_any_element()
+fn artist_sep() -> AnyElement {
+    div().flex_none().child(" / ").into_any_element()
 }
 
 /// 行尾操作区：收藏（♡/♥）+ 更多（⋯）+ 移除（✕）。
@@ -431,8 +391,7 @@ pub(super) fn actions_cell(
 
 #[cfg(test)]
 mod tests {
-    use super::{TWO_LINE_MIN, subtitle_parts};
-    use crate::entities::ScopeKind;
+    use super::TWO_LINE_MIN;
     use crate::shell::Density;
 
     #[test]
@@ -446,26 +405,6 @@ mod tests {
             Density::Compact.row_height() < TWO_LINE_MIN,
             "紧凑档（{}px）应当只有一行（阈值 {TWO_LINE_MIN}px）",
             Density::Compact.row_height()
-        );
-    }
-
-    #[test]
-    fn subtitle_drops_the_segment_already_shown_by_the_hero() {
-        assert_eq!(subtitle_parts(ScopeKind::Artist, true, true), (false, true));
-        assert_eq!(subtitle_parts(ScopeKind::Album, true, true), (true, false));
-        assert_eq!(subtitle_parts(ScopeKind::All, true, true), (true, true));
-    }
-
-    #[test]
-    fn subtitle_parts_never_hide_the_only_meaningful_segment() {
-        // 副标题整块为空是允许的：不给点进空作用域的链接
-        assert_eq!(
-            subtitle_parts(ScopeKind::Artist, true, false),
-            (false, false)
-        );
-        assert_eq!(
-            subtitle_parts(ScopeKind::Album, false, true),
-            (false, false)
         );
     }
 }

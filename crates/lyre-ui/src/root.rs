@@ -100,8 +100,15 @@ impl RootView {
         let volume = cx.new(|cx| VolumeControl::new(playback.clone(), settings.clone(), cx));
 
         let transport = cx.new(|cx| Transport::new(playback.clone(), cx));
-        let now_playing =
-            cx.new(|cx| NowPlaying::new(playback.clone(), covers.clone(), library.clone(), cx));
+        let now_playing = cx.new(|cx| {
+            NowPlaying::new(
+                playback.clone(),
+                covers.clone(),
+                library.clone(),
+                shell.clone(),
+                cx,
+            )
+        });
         let mini =
             cx.new(|cx| MiniNowPlaying::new(playback.clone(), covers.clone(), library.clone(), cx));
         let search_page =
@@ -121,7 +128,7 @@ impl RootView {
         let sidebar = cx.new(|cx| Sidebar::new(shell.clone(), library.clone(), covers.clone(), cx));
         let home = cx.new(|cx| HomeView::new(shell.clone(), library.clone(), covers.clone(), cx));
         let lyrics = cx.new(|cx| LyricsView::new(playback.clone(), shell.clone(), cx));
-        let queue_panel = cx.new(|cx| QueuePanel::new(library.clone(), cx));
+        let queue_panel = cx.new(|cx| QueuePanel::new(library.clone(), shell.clone(), cx));
         let settings_panel = cx.new(|cx| {
             SettingsPanel::new(
                 settings.clone(),

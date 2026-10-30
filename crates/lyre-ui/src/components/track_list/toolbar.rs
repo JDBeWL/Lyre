@@ -139,23 +139,29 @@ pub(super) fn toolbar(
         }
     }
 
-    // 多选是全列表的功能（详情页、搜索页同样要批量收藏 / 批量进歌单），所以不进 `shows_actions`
-    if count > 0 {
-        bar = bar.child(text_button(
-            "header-select",
-            if selecting { "退出多选" } else { "多选" },
-            if selecting {
-                ButtonKind::Secondary
-            } else {
-                ButtonKind::Ghost
-            },
-            move |_, _, cx| {
-                list.update(cx, TrackList::toggle_selection_mode).ok();
-            },
-        ));
+    // 多选是全列表的功能（详情页、搜索页同样要批量收藏 / 批量进歌单），所以不进 `shows_actions`。
+    // 详情页 / 搜索页没有别的工具条内容，开关挪到列头右端（见 `chrome`），这里只留在曲库页。
+    if !headed_elsewhere && count > 0 {
+        bar = bar.child(selection_toggle(list, selecting));
     }
 
     bar
+}
+
+/// 多选开关。曲库页放在工具条里；详情页 / 搜索页没有工具条，放到列头右端。
+pub(super) fn selection_toggle(list: WeakEntity<TrackList>, selecting: bool) -> impl IntoElement {
+    text_button(
+        "header-select",
+        if selecting { "退出多选" } else { "多选" },
+        if selecting {
+            ButtonKind::Secondary
+        } else {
+            ButtonKind::Ghost
+        },
+        move |_, _, cx| {
+            list.update(cx, TrackList::toggle_selection_mode).ok();
+        },
+    )
 }
 
 /// 扫描进度指示：不确定进度（只报已找到数），因为扫描前不知道总文件数，百分比只能是假的。

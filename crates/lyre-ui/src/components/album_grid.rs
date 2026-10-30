@@ -310,6 +310,7 @@ fn grid_row(index: usize, cards: &[Card], columns: usize, ctx: RowCtx<'_>) -> An
     let mut row = div()
         .id(("grid-row", index))
         .flex_none()
+        .w_full()
         .h(px(ROW_H))
         .flex()
         .justify_start()
@@ -363,6 +364,11 @@ fn card_item(
     let group = SharedString::from(format!("card-{}", card.title));
     let title_for_play = card.title.clone();
     let track_id = card.id;
+    let tip = if card.subtitle.is_empty() {
+        card.title.clone()
+    } else {
+        format!("{} · {}", card.title, card.subtitle)
+    };
 
     div()
         // id 用标题而不是 `representative`：一首歌挂在多个艺术家下时，每个分组都选中同一首代表，
@@ -380,6 +386,7 @@ fn card_item(
         .p(px(theme::GAP_MD))
         .rounded(px(theme::RADIUS_MD))
         .cursor_pointer()
+        .tooltip(crate::common::tooltip::builder(tip))
         // 这版 gpui 没有 `transform`，「上浮」只能用阴影 + 底色提亮（见 `theme::hover_shadow`）
         .hover(|style| style.bg(theme::hover()).shadow(theme::hover_shadow()))
         .child(
@@ -458,7 +465,7 @@ fn card_meta(card: &Card) -> impl IntoElement {
         div()
             .w_full()
             .min_w_0()
-            .text_size(px(theme::FONT_MICRO))
+            .text_size(px(theme::FONT_CAPTION))
             .text_color(theme::text_faint())
             .truncate()
             .child(card.meta.clone()),

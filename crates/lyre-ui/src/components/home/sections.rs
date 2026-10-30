@@ -129,6 +129,12 @@ pub(super) fn recent_card(
     } else {
         format!("{} · {}", card.artist, card.meta)
     };
+    // 卡片文字一律截断，悬停时给出完整专辑名与艺术家。
+    let tip = if card.artist.is_empty() {
+        card.album.clone()
+    } else {
+        format!("{} · {}", card.album, card.artist)
+    };
 
     div()
         .id(SharedString::from(format!("home-recent-{index}")))
@@ -143,6 +149,7 @@ pub(super) fn recent_card(
         .p(px(RECENT_PAD))
         .cursor_pointer()
         .hover(|style| style.bg(theme::elevated()))
+        .tooltip(crate::common::tooltip::builder(tip))
         .on_click(move |_, _, cx| {
             // `activate` 只发事件，装载播放器由根视图做。
             target.update(cx, |library, cx| {
@@ -320,6 +327,11 @@ fn poster_card(
     } else {
         format!("{} · {}", card.artist, card.meta)
     };
+    let tip = if card.artist.is_empty() {
+        card.album.clone()
+    } else {
+        format!("{} · {}", card.album, card.artist)
+    };
 
     div()
         .id((section, index))
@@ -333,6 +345,7 @@ fn poster_card(
         .rounded(px(theme::RADIUS_MD))
         .cursor_pointer()
         .hover(|style| style.bg(theme::hover()))
+        .tooltip(crate::common::tooltip::builder(tip))
         .on_click(move |_, _, cx| {
             target.update(cx, |library, cx| {
                 library.activate_album(&queue_album, id, cx);
@@ -419,6 +432,11 @@ fn list_card(
     );
     let shell = shell.clone();
     let library = library.clone();
+    let tip = if info.meta.is_empty() {
+        info.title.clone()
+    } else {
+        format!("{} · {}", info.title, info.meta)
+    };
 
     div()
         .id(("home-list", index))
@@ -431,6 +449,7 @@ fn list_card(
         .rounded(px(theme::RADIUS_MD))
         .cursor_pointer()
         .hover(|style| style.bg(theme::hover()))
+        .tooltip(crate::common::tooltip::builder(tip))
         .on_click(move |_, _, cx| {
             crate::shell::enter_scope_from_here(scope.clone(), &shell, &library, cx);
         })

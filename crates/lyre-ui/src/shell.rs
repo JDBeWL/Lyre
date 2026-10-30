@@ -116,6 +116,14 @@ impl ShellEntity {
         cx.notify();
     }
 
+    /// 收起当前打开的面板。浮层的关闭键与遮罩点击都走这里。
+    pub fn close_panel(&mut self, cx: &mut Context<Self>) {
+        if self.right_panel.take().is_some() {
+            self.recompute_grid_columns();
+            cx.notify();
+        }
+    }
+
     pub fn set_density(&mut self, density: Density, cx: &mut Context<Self>) {
         if self.density != density {
             self.density = density;

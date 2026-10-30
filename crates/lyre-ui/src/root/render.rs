@@ -38,6 +38,8 @@ const DROP_HINT_ANIM: &str = "drop-hint";
 struct Frame {
     /// 右面板当前页签；`None` = 整块收起。
     right_panel: Option<PanelTab>,
+    /// 右面板是否以浮层盖在主区上（窄档）。浮层不占同级列，改由 [`RootView::overlays`] 画。
+    panel_overlay: bool,
     /// 歌词遮罩是否正盖在主区上。
     lyrics_open: bool,
     sidebar: SidebarState,
@@ -51,6 +53,8 @@ struct Frame {
     hero_seed: Option<String>,
     /// 底部提示条距窗口底的距离，按当前底栏高度算（窄窗口下底栏是两行、更高）。
     toast_bottom: f32,
+    /// 底栏高度。浮层右面板要停在底栏上沿。
+    bottom_bar_h: f32,
     toast: Entity<ToastEntity>,
     library: Entity<LibraryEntity>,
     shell: Entity<ShellEntity>,
@@ -60,6 +64,7 @@ impl Frame {
     fn read(view: &RootView, cx: &App) -> Self {
         let shell = view.shell.read(cx);
         let right_panel = shell.right_panel();
+        let panel_overlay = shell.right_panel_overlays();
         let lyrics_open = shell.shows_lyrics();
         let sidebar = shell.sidebar();
         let nav = shell.nav_section();
@@ -67,7 +72,8 @@ impl Frame {
         let show_back = can_back
             && (view.library.read(cx).scope().is_scoped()
                 || matches!(nav, NavSection::Search | NavSection::Settings));
-        let toast_bottom = theme::bottom_bar_height(shell.stacks_bottom_bar()) + theme::GAP_LG;
+        let bottom_bar_h = theme::bottom_bar_height(shell.stacks_bottom_bar());
+        let toast_bottom = bottom_bar_h + theme::GAP_LG;
         let back_hint =
             SharedString::from(back_tooltip(shell.peek_history().map(
                 |(section, scope)| (section, view.library.read(cx).label_for(&scope)),
@@ -83,6 +89,7 @@ impl Frame {
 
         Self {
             right_panel,
+            panel_overlay,
             lyrics_open,
             sidebar,
             nav,
@@ -90,6 +97,7 @@ impl Frame {
             back_hint,
             hero_seed,
             toast_bottom,
+            bottom_bar_h,
             toast: view.toast.clone(),
             library: view.library.clone(),
             shell: view.shell.clone(),
@@ -248,9 +256,11 @@ impl RootView {
                 row.child(self.sidebar.clone())
             })
             .child(self.center_card(frame, cx))
-            .when_some(frame.right_panel, |main, tab| {
-                main.child(self.right_panel(tab))
-            })
+            // 浮层不占同级列，排到 `overlays` 里
+            .when_some(
+                frame.right_panel.filter(|_| !frame.panel_overlay),
+                |main, tab| main.child(self.right_panel(tab)),
+            )
     }
 
     /// 中间那张卡片：页头色带 +（可选）浮动返回按钮 + 当前区段内容 +（可选）歌词遮罩。
@@ -337,7 +347,7 @@ impl RootView {
         }
     }
 
-    /// 右侧面板那张卡片。只做出现不做收起：收起要求元素在状态变 `None` 后继续存活。
+    /// 右侧面板那张卡片，按列停靠时用。只做出现不做收起：收起要求元素在状态变 `None` 后继续存活。
     fn right_panel(&self, tab: PanelTab) -> impl IntoElement {
         let panel = match tab {
             PanelTab::NowPlaying => self.now_playing.clone().into_any_element(),
@@ -360,10 +370,68 @@ impl RootView {
             )
     }
 
-    /// 浮在整棵树之上的两层：拖拽导入遮罩与底部提示条。
+    /// 窄档的右面板：遮罩 + 贴右边的一列卡片，只盖顶栏与底栏之间的主区。
+    fn right_panel_overlay(&self, tab: PanelTab, frame: &Frame) -> impl IntoElement {
+        let panel = match tab {
+            PanelTab::NowPlaying => self.now_playing.clone().into_any_element(),
+            PanelTab::Queue => self.queue_panel.clone().into_any_element(),
+        };
+        let shell = self.shell.clone();
+        let id = SharedString::from(format!("panel-overlay-{}", panel_id(tab)));
+
+        let backdrop = div()
+            .id("panel-overlay-backdrop")
+            .absolute()
+            .top_0()
+            .left_0()
+            .size_full()
+            .bg(rgba(0x000000a6))
+            // 命中测试默认会连下层一起收：不拦住的话点遮罩会顺手点到底下的卡片。
+            .occlude()
+            .on_click(move |_, _, cx| {
+                shell.update(cx, ShellEntity::close_panel);
+            });
+
+        div()
+            .absolute()
+            .top(px(theme::TOP_BAR_H))
+            .bottom(px(frame.bottom_bar_h))
+            .left_0()
+            .right_0()
+            .child(backdrop)
+            .child(
+                div()
+                    .id(id.clone())
+                    .absolute()
+                    .top_0()
+                    .bottom_0()
+                    .right(px(theme::GUTTER))
+                    .w(px(theme::RIGHT_PANEL_W))
+                    .rounded(px(theme::RADIUS_CARD))
+                    .overflow_hidden()
+                    .shadow(vec![
+                        BoxShadow::new(px(0.), px(0.), hsla(0., 0., 0., 0.55)).blur_radius(px(24.)),
+                    ])
+                    .child(panel)
+                    // `with_animation` 必须放在链式末尾
+                    .with_animation(
+                        id,
+                        Animation::new(PANEL_FADE).with_easing(ease_out_quint()),
+                        Styled::opacity,
+                    ),
+            )
+    }
+
+    /// 浮在整棵树之上的三层：窄屏右面板浮层、拖拽导入遮罩、底部提示条。
     /// 返回 `Vec` 而不是包一层 `div()`：多一个 flex 子项会把根布局挤歪。
     fn overlays(&self, frame: &Frame) -> Vec<AnyElement> {
         let mut layers = Vec::new();
+        if frame.panel_overlay
+            && let Some(tab) = frame.right_panel
+        {
+            layers.push(self.right_panel_overlay(tab, frame).into_any_element());
+        }
+        // 拖拽导入提示要盖在浮层之上
         if self.drop_active {
             layers.push(drop_hint().into_any_element());
         }

@@ -1,4 +1,4 @@
-//! 首页：继续收听快捷网格 + 横向滚动区块（最近播放 / 为你推荐 / 热门专辑）+ 浏览入口。
+//! 首页：最近播放快捷网格 + 横向滚动区块（你的歌单 / 为你推荐 / 热门专辑）+ 浏览入口。
 //! 「最近播放」取自 [`crate::recents::Recents`]（跨重启），与队列面板的「已播放」不是同一份数据。
 
 use std::cell::RefCell;
@@ -246,7 +246,7 @@ impl Render for HomeView {
         );
 
         if !recents.is_empty() {
-            page = page.child(section_title("继续收听"));
+            page = page.child(section_title("最近播放"));
             // gpui 0.3.8 没有 flex_wrap，手工分行；每行几张由可用宽度反推，
             // 写死 4 会在刚进 Wide 断点时把第 4 张切掉
             let grid_cols = grid_columns_in(self.shell.read(cx).center_width() - PAD * 2.0);
@@ -270,15 +270,6 @@ impl Render for HomeView {
                 ));
             }
             page = page.child(grid);
-
-            page = page.child(horizontal_section(
-                "home-recent-row",
-                "最近播放",
-                recents.clone(),
-                self,
-                view.clone(),
-                cx,
-            ));
         }
 
         if !lists.is_empty() {

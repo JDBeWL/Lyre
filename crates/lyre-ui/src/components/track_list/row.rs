@@ -13,20 +13,13 @@ use super::{
     cells, drag,
 };
 
-/// 列头的第二段写谁：必须和每行副标题的裁剪规则对得上，否则表头指向一列不存在的文字。
-fn title_column_label(kind: ScopeKind) -> &'static str {
-    match kind {
-        ScopeKind::Artist => "标题 · 专辑",
-        ScopeKind::All | ScopeKind::Album => "标题 · 艺术家",
-    }
-}
-
 /// 专辑列要不要画：断点允许，且专辑详情里永远不画（每行都是同一张专辑）。
 pub(super) fn show_album_column(breakpoint_allows: bool, kind: ScopeKind) -> bool {
     breakpoint_allows && kind != ScopeKind::Album
 }
 
-pub(super) fn column_header(env: &RowEnv) -> impl IntoElement {
+/// 列头。`trailing` 是行操作列那一格里的附加控件（详情页 / 搜索页的「多选」开关）。
+pub(super) fn column_header(env: &RowEnv, trailing: Option<AnyElement>) -> impl IntoElement {
     let mut row = div()
         .flex_none()
         .h(px(theme::COLUMN_HEADER_H))
@@ -35,7 +28,7 @@ pub(super) fn column_header(env: &RowEnv) -> impl IntoElement {
         .px(px(theme::GAP_MD))
         .border_b_1()
         .border_color(theme::border_soft())
-        .text_size(px(theme::FONT_MICRO))
+        .text_size(px(theme::FONT_CAPTION))
         .text_color(theme::text_muted())
         // 勾选列与手柄列没有表头文字，但要占同样的宽：否则切换多选会在每行前面挖出一道错位。
         .when(env.selectable, |row| {
@@ -45,7 +38,7 @@ pub(super) fn column_header(env: &RowEnv) -> impl IntoElement {
             row.child(div().flex_none().w(px(HANDLE_W)))
         })
         .child(div().flex_none().w(px(INDEX_W)))
-        .child(div().flex_1().min_w_0().child(title_column_label(env.kind)));
+        .child(div().flex_1().min_w_0().child("标题"));
 
     if env.show_album {
         row = row.child(div().flex_none().w(px(ALBUM_W)).child("专辑"));
@@ -59,7 +52,15 @@ pub(super) fn column_header(env: &RowEnv) -> impl IntoElement {
             .pr(px(theme::GAP_MD))
             .child("时长"),
     )
-    .child(div().w(px(ACTIONS_W)))
+    .child(
+        div()
+            .flex_none()
+            .w(px(ACTIONS_W))
+            .flex()
+            .items_center()
+            .justify_end()
+            .children(trailing),
+    )
 }
 
 /// 行状态，四个态互斥。
@@ -245,15 +246,7 @@ pub(super) fn row(
     };
 
     element = element.child(index_cell).child(cells::title_cell(
-        index,
-        track,
-        state,
-        env,
-        library,
-        list.clone(),
-        covers,
-        track_id,
-        cx,
+        index, track, state, env, library, list, covers, track_id, cx,
     ));
 
     if env.show_album {
@@ -340,16 +333,9 @@ pub(super) fn row(
 
 #[cfg(test)]
 mod tests {
-    use super::{RowState, show_album_column, title_column_label};
+    use super::{RowState, show_album_column};
     use crate::entities::ScopeKind;
     use lyre_core::TrackId;
-
-    #[test]
-    fn column_header_second_segment_matches_the_subtitle() {
-        assert_eq!(title_column_label(ScopeKind::Artist), "标题 · 专辑");
-        assert_eq!(title_column_label(ScopeKind::Album), "标题 · 艺术家");
-        assert_eq!(title_column_label(ScopeKind::All), "标题 · 艺术家");
-    }
 
     #[test]
     fn album_column_vanishes_inside_an_album_detail() {

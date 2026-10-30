@@ -10,7 +10,10 @@ use crate::cover::CoverCache;
 use crate::entities::{LibraryEntity, PlaybackEntity, PlaybackEvent};
 use crate::icon::Glyph;
 use crate::platform::*;
+use crate::shell::ShellEntity;
 use crate::theme;
+
+use super::panel_close_button;
 
 const COVER_SIZE: f32 = 200.0;
 /// 「下一首」卡片里的小封面边长。
@@ -20,11 +23,13 @@ pub struct NowPlaying {
     playback: Entity<PlaybackEntity>,
     covers: Entity<CoverCache>,
     library: Entity<LibraryEntity>,
+    shell: Entity<ShellEntity>,
     /// 这一栏正在画的两张封面（当前曲 + 下一首），用来判断缓存的 notify 到底有没有改变画面。
     shown: [Option<Arc<RenderImage>>; 2],
     _track_sub: Subscription,
     _cover_sub: Subscription,
     _library_sub: Subscription,
+    _shell_sub: Subscription,
 }
 
 impl NowPlaying {
@@ -32,6 +37,7 @@ impl NowPlaying {
         playback: Entity<PlaybackEntity>,
         covers: Entity<CoverCache>,
         library: Entity<LibraryEntity>,
+        shell: Entity<ShellEntity>,
         cx: &mut Context<Self>,
     ) -> Self {
         // 用 `subscribe` 而不是 `observe`：`PlaybackEntity` 播放期间每 100ms 因进度 notify 一次，
@@ -60,15 +66,19 @@ impl NowPlaying {
 
         // 关注状态、艺术家统计、下一首都来自曲库；曲库变了要重画。
         let library_sub = cx.observe(&library, |_, _, cx| cx.notify());
+        // 浮层模式下右上角多一枚关闭键；面板实体不一定随根视图重绘，自己订阅外壳。
+        let shell_sub = cx.observe(&shell, |_, _, cx| cx.notify());
 
         let mut this = Self {
             playback,
             covers,
             library,
+            shell,
             shown: [None, None],
             _track_sub: track_sub,
             _cover_sub: cover_sub,
             _library_sub: library_sub,
+            _shell_sub: shell_sub,
         };
         this.refresh_covers(cx);
         this
@@ -147,6 +157,7 @@ struct Derived {
 
 impl Render for NowPlaying {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let overlay = self.shell.read(cx).right_panel_overlays();
         let (track, duration, error) = {
             let playback = self.playback.read(cx);
             (
@@ -202,6 +213,7 @@ impl Render for NowPlaying {
             Some(track) => (track.title.clone(), track.subtitle()),
             None => ("未在播放".to_owned(), String::new()),
         };
+        let has_subtitle = !subtitle.is_empty();
 
         // 宽度撑满才能截断长标题。
         let mut hero = div()
@@ -221,19 +233,25 @@ impl Render for NowPlaying {
                     .w_full()
                     .child(
                         div()
+                            .id("np-title")
                             .w_full()
                             .text_size(px(theme::FONT_TITLE))
                             .font_weight(theme::WEIGHT_TITLE)
                             .text_color(theme::text())
                             .truncate()
+                            .tooltip(crate::common::tooltip::builder(title.clone()))
                             .child(title),
                     )
                     .child(
                         div()
+                            .id("np-subtitle")
                             .w_full()
                             .text_size(px(theme::FONT_CAPTION))
                             .text_color(theme::text_muted())
                             .truncate()
+                            .when(has_subtitle, |line| {
+                                line.tooltip(crate::common::tooltip::builder(subtitle.clone()))
+                            })
                             .child(subtitle),
                     ),
             );
@@ -286,6 +304,7 @@ impl Render for NowPlaying {
 
         div()
             .flex_none()
+            .relative()
             .w(px(theme::RIGHT_PANEL_W))
             // 只写 `w()` 压不住内容：flex 默认 `min-width: auto`，长歌名会把面板顶宽。`min_w` + `max_w` 钉死。
             .min_w(px(theme::RIGHT_PANEL_W))
@@ -304,6 +323,16 @@ impl Render for NowPlaying {
                     .p(px(theme::GAP_XL))
                     .child(body),
             )
+            // 浮层盖在主区上时没有自己的标题栏，关闭键浮在封面外的右上角。
+            .when(overlay, |panel| {
+                panel.child(
+                    div()
+                        .absolute()
+                        .top(px(theme::GAP_SM))
+                        .right(px(theme::GAP_SM))
+                        .child(panel_close_button("np-close", &self.shell)),
+                )
+            })
     }
 }
 

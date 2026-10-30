@@ -51,9 +51,14 @@ impl Breakpoint {
         }
     }
 
-    /// 右侧面板默认是否展开。窄窗口下改为点击后以浮层出现。
+    /// 右侧面板默认是否展开。非宽档默认收起，点击后：中档仍占一列，窄档改为浮层。
     pub fn right_panel_expanded(self) -> bool {
         matches!(self, Self::Wide)
+    }
+
+    /// 打开着的右面板是否盖在主区上。窄档才浮层，中档仍按列排布。
+    pub fn right_panel_overlays(self) -> bool {
+        matches!(self, Self::Narrow)
     }
 
     /// 列表是否显示「专辑」列。
@@ -133,6 +138,16 @@ impl ShellEntity {
         self.breakpoint
     }
 
+    /// 打开着的右面板是否以浮层盖在主区上（窄档）。
+    pub fn right_panel_overlays(&self) -> bool {
+        self.right_panel.is_some() && self.breakpoint.right_panel_overlays()
+    }
+
+    /// 右面板是否作为同级列占宽度。窄档的浮层不占。
+    fn panel_docks(&self) -> bool {
+        self.right_panel.is_some() && !self.breakpoint.right_panel_overlays()
+    }
+
     /// 生效形态 = 手动值（`sidebar_override`）与断点默认里更收起的那个：手动收起后拉宽不弹开，
     /// 窄窗口也不硬撑展开。`toggle_sidebar` 从这里起循环。
     pub fn sidebar(&self) -> SidebarState {
@@ -156,7 +171,8 @@ impl ShellEntity {
         if sidebar != SidebarState::Hidden {
             taken += sidebar.width() + gutter;
         }
-        if has_right_panel {
+        // 浮层不占布局宽度：窄档面板盖在主区上，主区仍按整宽排。
+        if has_right_panel && !Breakpoint::for_width(width).right_panel_overlays() {
             taken += crate::theme::RIGHT_PANEL_W + gutter;
         }
         (width - taken).max(0.0)
@@ -242,7 +258,7 @@ impl ShellEntity {
 
     /// 重算列数与单卡宽度。返回 `true` 时调用方必须 notify：数据按列数切行、封面高度按卡宽算。
     pub(super) fn recompute_grid_columns(&mut self) -> bool {
-        let panel = if self.right_panel.is_some() {
+        let panel = if self.panel_docks() {
             crate::theme::RIGHT_PANEL_W
         } else {
             0.0
@@ -270,8 +286,8 @@ impl ShellEntity {
 
         let crossed = self.breakpoint != previous_breakpoint;
         if crossed
-            // 右面板只有开 / 关两态、没有手动值，窄档收起它是布局约束而不是改掉用户偏好。
-            && !self.breakpoint.right_panel_expanded()
+            // 窄档有浮层可用，不再需要为了腾宽度收起面板；中档仍按列占宽。
+            && self.breakpoint == Breakpoint::Medium
             && matches!(self.right_panel, Some(PanelTab::NowPlaying))
         {
             self.right_panel = None;
@@ -279,7 +295,9 @@ impl ShellEntity {
 
         // 小幅缩放不重绘：flex 自适应，元素树不必重建。
         // 列数要单独判 —— 数据按列数切行交给 `uniform_list`，列数变了就得重建行。
-        crossed || self.recompute_grid_columns()
+        // 跨断点时列数也要重算（侧栏宽度与面板是否占宽都变了），不能短路跳过。
+        let columns_changed = self.recompute_grid_columns();
+        crossed || columns_changed
     }
 
     /// `new()` 注册的窗口尺寸订阅：`resize_to` 返回 true 才 `notify`。
@@ -294,7 +312,7 @@ impl ShellEntity {
 mod tests {
     use super::{
         Breakpoint, CARD_MIN_W, Density, GRID_GAP, GRID_PAD, MAX_GRID_COLUMNS, MEDIUM_MIN,
-        STACKED_BOTTOM_MIN, ShellEntity, SidebarState, WIDE_MIN,
+        PanelTab, STACKED_BOTTOM_MIN, ShellEntity, SidebarState, WIDE_MIN,
     };
     use crate::platform::Subscription;
     use crate::shell::NavSection;
@@ -538,6 +556,61 @@ mod tests {
             ShellEntity::center_width_for(1000.0, SidebarState::Hidden, false),
             1000.0 - theme::GUTTER * 2.0
         );
+    }
+
+    #[test]
+    fn a_floating_panel_does_not_squeeze_the_center() {
+        // 窄档（<860）面板是浮层：主区宽度与没开面板时完全一样。
+        let without = ShellEntity::center_width_for(800.0, SidebarState::Icons, false);
+        let with_panel = ShellEntity::center_width_for(800.0, SidebarState::Icons, true);
+        assert_eq!(with_panel, without);
+        assert_eq!(
+            with_panel,
+            800.0 - theme::GUTTER * 2.0 - theme::SIDEBAR_ICON_W - theme::GUTTER
+        );
+    }
+
+    #[test]
+    fn a_docked_panel_still_costs_the_center_its_width() {
+        let without = ShellEntity::center_width_for(1000.0, SidebarState::Icons, false);
+        let with_panel = ShellEntity::center_width_for(1000.0, SidebarState::Icons, true);
+        assert_eq!(with_panel, without - theme::RIGHT_PANEL_W - theme::GUTTER);
+    }
+
+    #[test]
+    fn crossing_into_narrow_keeps_an_open_queue_as_an_overlay() {
+        let mut shell = shell_at(1000.0, None);
+        shell.right_panel = Some(PanelTab::Queue);
+        shell.recompute_grid_columns();
+        let docked_columns = shell.grid_columns;
+        let docked_center = shell.center_width();
+
+        resize(&mut shell, 840.0);
+        assert!(shell.right_panel_overlays(), "窄档下打开着的队列应当转浮层");
+        assert_eq!(
+            shell.right_panel,
+            Some(PanelTab::Queue),
+            "有浮层可用就不该收起队列"
+        );
+        assert!(
+            shell.center_width() > docked_center,
+            "浮层不该再占掉 320px：主区从 {docked_center} 涨到 {}",
+            shell.center_width()
+        );
+        assert!(
+            shell.grid_columns > docked_columns,
+            "跨断点后列数要按新布局重算：{} 列没有变",
+            shell.grid_columns
+        );
+    }
+
+    #[test]
+    fn crossing_into_medium_still_collapses_now_playing() {
+        // 中档面板仍占一列，给窄窗口留出主区是原有约束。
+        let mut shell = shell_at(1600.0, None);
+        shell.right_panel = Some(PanelTab::NowPlaying);
+        resize(&mut shell, 1000.0);
+        assert_eq!(shell.right_panel, None);
     }
 
     /// 底栏左栏宽度必须连续，不许在 `MEDIUM_MIN` 处跳变：中间列靠 `justify_center` 居中，跳变会让它整组瞬移。

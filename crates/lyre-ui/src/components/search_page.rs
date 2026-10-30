@@ -14,9 +14,10 @@ use crate::platform::*;
 use crate::shell::{NavSection, ShellEntity};
 use crate::theme;
 
-/// 探索网格最多几块分类卡、每行几块（gpui 该版本没有 `flex_wrap`，按列数手工分行）。
+/// 探索网格最多几块分类卡；列数按可用宽度反推（2 / 3 / 4），行数由它切。
 const BROWSE_MAX: usize = 12;
-const BROWSE_COLS: usize = 4;
+/// 探索卡的最小可读宽度。再窄，卡上的专辑名只剩一个字。
+const BROWSE_TILE_MIN_W: f32 = 150.0;
 const BROWSE_TILE_H: f32 = 76.0;
 /// 每个分区块最多画几行。
 const BLOCK_MAX: usize = 4;
@@ -26,10 +27,35 @@ const TOP_COVER: f32 = 120.0;
 const ROW_THUMB: f32 = 36.0;
 /// 一个分组栏的最小可读宽度：再窄，栏头「艺术家」这五个字本身就要折行。
 const RESULT_COL_MIN_W: f32 = 150.0;
-/// 并排所需最小宽度：`TOP_W` + 一条间距 + 三栏各 `RESULT_COL_MIN_W` + 栏间两条间距 = 842px。
-/// 达不到就让「最佳结果」独占一行。
-const RESULTS_SIDE_BY_SIDE_MIN: f32 =
-    TOP_W + theme::GAP_XL + RESULT_COL_MIN_W * 3.0 + theme::GAP_XL * 2.0;
+/// 三个分组栏并排所需最小宽度：三栏各 `RESULT_COL_MIN_W` + 栏间两条间距。
+/// 达不到就退成单列。
+const GROUPS_ROW_MIN_W: f32 = RESULT_COL_MIN_W * 3.0 + theme::GAP_XL * 2.0;
+
+/// 探索网格每行几块：按可用宽度反推，夹在 2–4 列之间。
+fn browse_columns(usable: f32) -> usize {
+    let gap = theme::GAP_MD;
+    let columns = ((usable + gap) / (BROWSE_TILE_MIN_W + gap)).floor() as usize;
+    columns.clamp(2, 4)
+}
+
+/// 分组栏一行放几栏：宽到能放下三栏才并排，否则单列。
+fn group_columns(usable: f32, groups: usize) -> usize {
+    if groups > 0 && usable >= GROUPS_ROW_MIN_W {
+        groups
+    } else {
+        1
+    }
+}
+
+/// 最佳结果与分组栏能否并排：按实际命中的分组数算，空分组不占宽，也不硬挤。
+fn results_side_by_side(usable: f32, groups: usize) -> bool {
+    groups > 0
+        && usable
+            >= TOP_W
+                + theme::GAP_XL
+                + groups as f32 * RESULT_COL_MIN_W
+                + (groups - 1) as f32 * theme::GAP_XL
+}
 
 pub struct SearchPage {
     library: Entity<LibraryEntity>,
@@ -231,6 +257,8 @@ impl Render for SearchPage {
         let searching = crate::entities::searching(&query);
         let loading = self.library.read(cx).loading();
         let summary = self.summary(cx);
+        // 主区宽度已扣掉侧栏与停靠的面板，这里再扣页面左右内边距。
+        let usable = (self.shell.read(cx).center_width() - theme::GAP_LG * 2.0).max(0.0);
 
         // 主区左上角浮着返回按钮（`root::floating_back`），标题不让开就会被压在下面；
         // 让位量与它同源于 `root::HEADER_BACK_INSET`。
@@ -269,20 +297,28 @@ impl Render for SearchPage {
                     .child(summary),
             );
 
+        // 有歌曲命中时这块是 TrackList 的页头：大标题和「结果」摘要让位，歌曲行才能尽早上屏。
+        // 空搜索或只有分组命中时仍保留标题。
+        let track_results = searching && self.library.read(cx).visible_len() > 0;
+
         let mut page = div()
             .id("search-page")
             .flex_none()
             .flex()
             .flex_col()
-            .w_full()
-            .child(header);
+            .w_full();
+        page = if track_results {
+            page.pt(px(header_top))
+        } else {
+            page.child(header)
+        };
 
         page = if searching {
-            page.child(self.results_body(&query, cx))
+            page.child(self.results_body(&query, usable, cx))
         } else if loading {
             page.child(loading_state())
         } else {
-            page.child(self.browse_grid(cx))
+            page.child(self.browse_grid(usable, cx))
         };
 
         page.into_any_element()
@@ -291,7 +327,7 @@ impl Render for SearchPage {
 
 impl SearchPage {
     /// 未输入时的探索网格：分类卡从专辑分组派生 —— 曲库没有流派元数据。
-    fn browse_grid(&self, cx: &mut Context<Self>) -> AnyElement {
+    fn browse_grid(&self, usable: f32, cx: &mut Context<Self>) -> AnyElement {
         let groups = App::update_entity(cx, &self.library, |library, _| library.albums());
         if groups.is_empty() {
             return div()
@@ -304,12 +340,13 @@ impl SearchPage {
                 .into_any_element();
         }
 
+        let columns = browse_columns(usable);
         let tiles: Vec<AlbumGroup> = groups.iter().take(BROWSE_MAX).cloned().collect();
         let mut grid = div().flex_none().flex().flex_col().gap(px(theme::GAP_MD));
-        for (row_ix, chunk) in tiles.chunks(BROWSE_COLS).enumerate() {
+        for (row_ix, chunk) in tiles.chunks(columns).enumerate() {
             let mut row = div().flex_none().flex().gap(px(theme::GAP_MD));
             for (col, group) in chunk.iter().enumerate() {
-                row = row.child(self.browse_tile(row_ix * BROWSE_COLS + col, group));
+                row = row.child(self.browse_tile(row_ix * columns + col, group));
             }
             grid = grid.child(row);
         }
@@ -353,6 +390,7 @@ impl SearchPage {
             .bg(color)
             .cursor_pointer()
             .hover(|style| style.opacity(0.88))
+            .tooltip(crate::common::tooltip::builder(group.title.clone()))
             .on_click({
                 let title = title.clone();
                 let library = library.clone();
@@ -383,7 +421,7 @@ impl SearchPage {
                     .absolute()
                     .left(px(theme::GAP_MD))
                     .bottom(px(theme::GAP_SM))
-                    .text_size(px(theme::FONT_MICRO))
+                    .text_size(px(theme::FONT_CAPTION))
                     .text_color(rgb(0xffffff).opacity(0.75))
                     .child(meta),
             )
@@ -404,7 +442,7 @@ impl SearchPage {
             .into_any_element()
     }
 
-    fn results_body(&mut self, query: &str, cx: &mut Context<Self>) -> AnyElement {
+    fn results_body(&mut self, query: &str, usable: f32, cx: &mut Context<Self>) -> AnyElement {
         self.sync_results(query, cx);
         let Some(cache) = self.results.as_ref() else {
             return div().into_any_element();
@@ -421,68 +459,69 @@ impl SearchPage {
             return no_results().into_any_element();
         }
 
-        let artist_rows: Vec<MiniRow> = results.artists.iter().map(MiniRow::from_artist).collect();
-        let album_rows: Vec<MiniRow> = results.albums.iter().map(MiniRow::from_album).collect();
-        let lists = results.lists.clone();
-
-        // 分组栏的 `flex_1` / `w_full` 在下面分支里加：横排与竖排的撑满方式不同。
-        let groups = div()
-            .flex()
-            .min_w_0()
-            .gap(px(theme::GAP_XL))
-            .items_start()
-            .child(self.group_column("艺术家", NavSection::Artists, artist_total, artist_rows, cx))
-            .child(self.group_column("专辑", NavSection::Albums, album_total, album_rows, cx))
-            .child(self.list_column(lists, cx));
-
-        let shell_row = |children: Div| {
+        // 只画命中的分组：空分组连同「没有匹配」不再占首屏高度。
+        let mut blocks: Vec<AnyElement> = Vec::new();
+        if artist_total > 0 {
+            let rows = results.artists.iter().map(MiniRow::from_artist).collect();
+            blocks.push(self.group_column("艺术家", NavSection::Artists, artist_total, rows, cx));
+        }
+        if album_total > 0 {
+            let rows = results.albums.iter().map(MiniRow::from_album).collect();
+            blocks.push(self.group_column("专辑", NavSection::Albums, album_total, rows, cx));
+        }
+        if list_total > 0 {
+            blocks.push(self.list_column(results.lists.clone(), cx));
+        }
+        let groups_count = blocks.len();
+        // 分组栏放得下就按命中数并排，否则单列（窄屏）。
+        let groups = if group_columns(usable, groups_count) == 1 {
             div()
-                .flex_none()
-                .flex()
-                .w_full()
-                .gap(px(theme::GAP_XL))
-                .px(px(theme::GAP_LG))
-                .pb(px(theme::GAP_MD))
-                .items_start()
-                .child(children)
-        };
-
-        // 没有命中的曲目时不留空的最佳结果栏。
-        let Some(track) = results.top.clone() else {
-            return shell_row(groups.flex_1()).into_any_element();
-        };
-
-        // `center_width` 已经扣掉侧栏与右面板，这里不能再减一次。
-        let usable = self.shell.read(cx).center_width() - theme::GAP_LG * 2.0;
-        if usable >= RESULTS_SIDE_BY_SIDE_MIN {
-            shell_row(
-                div()
-                    .flex_none()
-                    .flex()
-                    .min_w_0()
-                    .gap(px(theme::GAP_XL))
-                    .items_start()
-                    .child(self.top_column(Some(track), cx))
-                    .child(groups.flex_1()),
-            )
-            .into_any_element()
-        } else {
-            // 放不下时「最佳结果」独占一行，三个分组栏分到整条宽度 —— 并排的话每栏只剩 57px。
-            div()
-                .flex_none()
+                .flex_1()
+                .min_w_0()
                 .flex()
                 .flex_col()
+                .gap(px(theme::GAP_XL))
+                .children(blocks)
+        } else {
+            div()
+                .flex_1()
+                .min_w_0()
+                .flex()
+                .gap(px(theme::GAP_XL))
+                .items_start()
+                .children(blocks)
+        };
+
+        let pad = |body: Div| {
+            body.flex_none()
+                .flex()
                 .w_full()
-                .gap(px(theme::GAP_MD))
                 .px(px(theme::GAP_LG))
                 .pb(px(theme::GAP_MD))
-                .child(self.top_column(Some(track), cx))
+        };
+
+        // 没有命中的曲目时不留空的最佳结果栏，分组栏独占整行。
+        let Some(track) = results.top.clone() else {
+            return pad(div().flex_col())
                 .child(groups.w_full())
-                .into_any_element()
+                .into_any_element();
+        };
+
+        if results_side_by_side(usable, groups_count) {
+            return pad(div().gap(px(theme::GAP_XL)).items_start())
+                .child(self.top_column(&track, false, cx))
+                .child(groups)
+                .into_any_element();
         }
+
+        // 放不下时「最佳结果」整行，分组栏在下方；窄屏分组栏还是单列。
+        pad(div().flex_col().gap(px(theme::GAP_MD)))
+            .child(self.top_column(&track, true, cx))
+            .when(groups_count > 0, |body| body.child(groups.w_full()))
+            .into_any_element()
     }
 
-    /// 歌单区块：只列命中的歌单，没有「查看全部」。
+    /// 歌单区块：只列命中的歌单，没有「查看全部」。调用方保证 `rows` 非空。
     fn list_column(&self, rows: Vec<(Scope, HeroInfo)>, cx: &mut Context<Self>) -> AnyElement {
         let mut col = div()
             .flex_1()
@@ -492,19 +531,8 @@ impl SearchPage {
             .gap(px(theme::GAP_XS))
             .child(plain_header("歌单"));
 
-        if rows.is_empty() {
-            col = col.child(
-                div()
-                    .px(px(theme::GAP_SM))
-                    .py(px(theme::GAP_MD))
-                    .text_size(px(theme::FONT_CAPTION))
-                    .text_color(theme::text_faint())
-                    .child("没有匹配"),
-            );
-        } else {
-            for (index, (scope, info)) in rows.into_iter().enumerate() {
-                col = col.child(self.list_row(index, scope, info, cx));
-            }
+        for (index, (scope, info)) in rows.into_iter().enumerate() {
+            col = col.child(self.list_row(index, scope, info, cx));
         }
         col.into_any_element()
     }
@@ -528,6 +556,11 @@ impl SearchPage {
             _ => None,
         };
         let menu_title = info.title.clone();
+        let tip = if info.meta.is_empty() {
+            info.title.clone()
+        } else {
+            format!("{} · {}", info.title, info.meta)
+        };
 
         let row = div()
             .id(("search-list-row", index))
@@ -541,6 +574,7 @@ impl SearchPage {
             .rounded(px(theme::RADIUS_MD))
             .cursor_pointer()
             .hover(|style| style.bg(theme::hover()))
+            .tooltip(crate::common::tooltip::builder(tip))
             .on_click(move |_, _, cx| {
                 // 搜索词由 `enter_scope` 清掉；`enter_scope_from_here` 先记历史，顶栏 ← 能退回搜索页。
                 crate::shell::enter_scope_from_here(scope.clone(), &shell, &library, cx);
@@ -584,18 +618,16 @@ impl SearchPage {
         }
     }
 
-    fn top_column(&self, track: Option<Track>, cx: &mut App) -> AnyElement {
+    /// `fill`：并排时钉 `TOP_W`，换行独占时铺满整行，避免右侧留一大块空白。
+    fn top_column(&self, track: &Track, fill: bool, cx: &mut App) -> AnyElement {
         let mut col = div()
             .flex_none()
-            .w(px(TOP_W))
             .flex()
             .flex_col()
             .gap(px(theme::GAP_MD))
             .child(plain_header("最佳结果"));
-        if let Some(track) = track {
-            col = col.child(self.top_card(&track, cx));
-        }
-        col.into_any_element()
+        col = if fill { col.w_full() } else { col.w(px(TOP_W)) };
+        col.child(self.top_card(track, cx)).into_any_element()
     }
 
     fn top_card(&self, track: &Track, cx: &mut App) -> AnyElement {
@@ -607,6 +639,11 @@ impl SearchPage {
             .filter(|a| !a.trim().is_empty())
             .or_else(|| track.album.clone())
             .unwrap_or_default();
+        let tip = if subtitle.is_empty() {
+            title.clone()
+        } else {
+            format!("{title} · {subtitle}")
+        };
         let cover = thumb(
             &self.covers,
             &self.library,
@@ -630,6 +667,7 @@ impl SearchPage {
             .bg(theme::elevated())
             .cursor_pointer()
             .hover(|style| style.bg(theme::border()))
+            .tooltip(crate::common::tooltip::builder(tip))
             .on_click(move |_, _, cx| {
                 library.update(cx, |library, cx| {
                     library.activate_in_view(id, cx);
@@ -703,19 +741,8 @@ impl SearchPage {
             .gap(px(theme::GAP_XS))
             .child(self.block_header(title, section, total));
 
-        if rows.is_empty() {
-            col = col.child(
-                div()
-                    .px(px(theme::GAP_SM))
-                    .py(px(theme::GAP_MD))
-                    .text_size(px(theme::FONT_CAPTION))
-                    .text_color(theme::text_faint())
-                    .child("没有匹配"),
-            );
-        } else {
-            for (index, row) in rows.into_iter().enumerate() {
-                col = col.child(self.mini_row(section, index, row, cx));
-            }
+        for (index, row) in rows.into_iter().enumerate() {
+            col = col.child(self.mini_row(section, index, row, cx));
         }
         col.into_any_element()
     }
@@ -770,6 +797,11 @@ impl SearchPage {
         let shell = self.shell.clone();
         let name = row.name.clone();
         let group_id = row.id;
+        let tip = if row.meta.is_empty() {
+            row.name.clone()
+        } else {
+            format!("{} · {}", row.name, row.meta)
+        };
 
         div()
             .id((section_label(section), index))
@@ -783,6 +815,7 @@ impl SearchPage {
             .rounded(px(theme::RADIUS_MD))
             .cursor_pointer()
             .hover(|style| style.bg(theme::hover()))
+            .tooltip(crate::common::tooltip::builder(tip))
             .on_click({
                 let library = library.clone();
                 let shell = shell.clone();
@@ -992,6 +1025,7 @@ fn no_results() -> impl IntoElement {
 #[cfg(test)]
 mod tests {
     // 不写 `use super::*`：`platform::*` 里的 gpui `test` 过程宏会遮蔽内置 `#[test]`。
+    use super::{browse_columns, group_columns, results_side_by_side};
     use crate::entities::searching;
 
     #[test]
@@ -1003,5 +1037,37 @@ mod tests {
     fn an_untouched_box_is_not_searching() {
         assert!(!searching(""));
         assert!(!searching("   "));
+    }
+
+    #[test]
+    fn browse_grid_uses_two_to_four_columns_by_width() {
+        assert_eq!(browse_columns(0.0), 2, "极窄也至少两列");
+        assert_eq!(browse_columns(440.0), 2, "560px 窗口下的搜索页主区");
+        assert_eq!(browse_columns(560.0), 3);
+        assert_eq!(browse_columns(820.0), 4);
+        assert_eq!(browse_columns(4000.0), 4, "超宽屏不再增加列数");
+    }
+
+    #[test]
+    fn result_groups_go_single_column_when_three_would_be_cramped() {
+        assert_eq!(
+            group_columns(440.0, 3),
+            1,
+            "窄屏三栏每栏只剩约 130px，读不了"
+        );
+        assert_eq!(group_columns(520.0, 3), 3);
+        assert_eq!(group_columns(520.0, 2), 2, "只命中两组就排两组，不硬凑三栏");
+    }
+
+    #[test]
+    fn side_by_side_only_when_every_remaining_group_fits() {
+        assert!(!results_side_by_side(440.0, 3));
+        assert!(!results_side_by_side(440.0, 1), "320 + 间距 + 150 仍放不下");
+        assert!(results_side_by_side(500.0, 1));
+        assert!(results_side_by_side(850.0, 3));
+        assert!(
+            !results_side_by_side(850.0, 0),
+            "没有分组可并排时不能让最佳结果被挤成半宽"
+        );
     }
 }

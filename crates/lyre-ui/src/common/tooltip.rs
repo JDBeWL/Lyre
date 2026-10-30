@@ -16,7 +16,7 @@ impl Render for TextTooltip {
             .bg(theme::elevated())
             .border_1()
             .border_color(theme::border())
-            .text_size(px(theme::FONT_MICRO))
+            .text_size(px(theme::FONT_CAPTION))
             .text_color(theme::text())
             .child(self.label.clone())
     }

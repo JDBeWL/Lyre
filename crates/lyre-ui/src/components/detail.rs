@@ -1,6 +1,7 @@
 //! 专辑 / 艺术家 / 歌单详情页的头图。
 
 use std::path::PathBuf;
+use std::rc::Rc;
 use std::time::Duration;
 
 use lyre_core::{AlbumGroup, ArtistGroup, CollectionId, TrackId, format_duration};
@@ -180,16 +181,23 @@ fn list_hero(
     }
 }
 
+/// 详情页「更多操作」里的多选开关。列表实体拥有状态，头图只负责把菜单项画出来。
+pub struct MultiSelectAction {
+    pub selecting: bool,
+    pub on_toggle: Rc<dyn Fn(&mut App) + 'static>,
+}
+
 /// 渲染详情页头图：`kind` 只影响封面形状（专辑方形 / 艺术家圆形）。
 pub fn hero(
     info: &HeroInfo,
     library: Entity<LibraryEntity>,
     covers: &Entity<CoverCache>,
     shell: Entity<ShellEntity>,
+    multi_select: Option<MultiSelectAction>,
     cx: &mut App,
 ) -> AnyElement {
     let cover = cover_slot(covers, &library, info, cx);
-    let actions = action_row(info, library, shell, cx);
+    let actions = action_row(info, library, shell, multi_select, cx);
 
     let tag = div()
         .text_size(px(theme::FONT_TITLE))
@@ -266,6 +274,7 @@ fn action_row(
     info: &HeroInfo,
     library: Entity<LibraryEntity>,
     shell: Entity<ShellEntity>,
+    multi_select: Option<MultiSelectAction>,
     cx: &mut App,
 ) -> AnyElement {
     // gpui 0.3.8 没有 `flex_wrap`，一行放不下只能让 chips 收缩，不能换行。
@@ -283,7 +292,12 @@ fn action_row(
     }
 
     row.child(shuffle_button(info, library.clone()))
-        .child(more_button(shell, library, info.collection_id))
+        .child(more_button(
+            shell,
+            library,
+            info.collection_id,
+            multi_select,
+        ))
         .into_any_element()
 }
 
@@ -341,6 +355,7 @@ fn more_button(
     shell: Entity<ShellEntity>,
     library: Entity<LibraryEntity>,
     collection: Option<CollectionId>,
+    multi_select: Option<MultiSelectAction>,
 ) -> AnyElement {
     let trigger = div()
         .id("hero-more")
@@ -361,17 +376,31 @@ fn more_button(
     crate::common::menu::dropdown(trigger, Anchor::TopLeft, move |menu, _window, _cx| {
         let open_queue = shell.clone();
         let open_now = shell.clone();
-        menu.item(
-            PopupMenuItem::new("打开播放队列").on_click(move |_, _, cx| {
-                open_queue.update(cx, |shell, cx| shell.toggle_panel(PanelTab::Queue, cx));
-            }),
-        )
-        .item(
-            PopupMenuItem::new("打开正在播放").on_click(move |_, _, cx| {
-                open_now.update(cx, |shell, cx| shell.toggle_panel(PanelTab::NowPlaying, cx));
-            }),
-        )
-        .when_some(collection, |menu, id| {
+        let mut menu = menu
+            .item(
+                PopupMenuItem::new("打开播放队列").on_click(move |_, _, cx| {
+                    open_queue.update(cx, |shell, cx| shell.toggle_panel(PanelTab::Queue, cx));
+                }),
+            )
+            .item(
+                PopupMenuItem::new("打开正在播放").on_click(move |_, _, cx| {
+                    open_now.update(cx, |shell, cx| shell.toggle_panel(PanelTab::NowPlaying, cx));
+                }),
+            );
+
+        if let Some(action) = multi_select.as_ref() {
+            let label = if action.selecting {
+                "退出多选"
+            } else {
+                "多选"
+            };
+            let toggle = Rc::clone(&action.on_toggle);
+            menu = menu
+                .separator()
+                .item(PopupMenuItem::new(label).on_click(move |_, _, cx| toggle(cx)));
+        }
+
+        menu.when_some(collection, |menu, id| {
             let library = library.clone();
             menu.separator()
                 .item(PopupMenuItem::new("更换封面").on_click(move |_, _, cx| {

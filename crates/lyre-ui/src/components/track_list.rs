@@ -78,6 +78,8 @@ pub struct TrackList {
     /// 页头高度依赖查询、多选开关与断点，变化时让页头重新量。
     page_query: String,
     page_breakpoint: Breakpoint,
+    /// 搜索页头还随可用宽度换列 / 换行，宽度变了也要重新量。
+    page_center_width: f32,
     page_selecting: bool,
     /// 多选模式开关：开着才画勾选列，点标题也从「播放」变成「选中」。
     selecting: bool,
@@ -132,6 +134,7 @@ impl TrackList {
             page_rows: 0,
             page_query: String::new(),
             page_breakpoint,
+            page_center_width: 0.0,
             page_selecting: false,
             selecting: false,
             selected: Rc::new(HashSet::new()),
@@ -235,6 +238,7 @@ impl Render for TrackList {
         };
         let query = self.library.read(cx).query().to_owned();
         let breakpoint = self.shell.read(cx).breakpoint();
+        let center_width = self.shell.read(cx).center_width();
 
         let list_weak = Self::weak(cx);
         let toolbar_state = toolbar::ToolbarState {
@@ -262,6 +266,10 @@ impl Render for TrackList {
                         .clone()
                         .with_uniform_item_height(px(env.row_height));
                     self.page_rows = count;
+                    if head == PageHead::Search {
+                        // 搜索结果增减会让分组的显隐变化，页头高度跟着变
+                        self.page.remeasure_items(0..1);
+                    }
                 }
                 if query != self.page_query {
                     if head == PageHead::Search {
@@ -279,6 +287,12 @@ impl Render for TrackList {
                     self.page.remeasure_items(0..1);
                     self.page_breakpoint = breakpoint;
                 }
+                if head == PageHead::Search && (center_width - self.page_center_width).abs() >= 0.5
+                {
+                    // 面板开合 / 拖窗口会换分组列数或并排方式，页头高度必须重新量
+                    self.page.remeasure_items(0..1);
+                    self.page_center_width = center_width;
+                }
                 if selecting != self.page_selecting {
                     // 批量操作条出现 / 消失会改变页头高度
                     self.page.remeasure_items(0..1);
@@ -290,6 +304,7 @@ impl Render for TrackList {
                 self.page_rows = count;
                 self.page_query.clone_from(&query);
                 self.page_breakpoint = breakpoint;
+                self.page_center_width = center_width;
                 self.page_selecting = selecting;
             }
             self.page_head = Some(head.clone());
@@ -311,11 +326,22 @@ impl Render for TrackList {
                         PageHead::Search => header = header.child(search_page.clone()),
                         PageHead::Scope(_) => {
                             if let Some(info) = hero.as_ref() {
+                                // 多选开关进头图的「更多操作」菜单，不再单独占一行。
+                                let multi_select = (count > 0).then(|| detail::MultiSelectAction {
+                                    selecting,
+                                    on_toggle: Rc::new({
+                                        let list = list_weak.clone();
+                                        move |cx: &mut App| {
+                                            list.update(cx, TrackList::toggle_selection_mode).ok();
+                                        }
+                                    }),
+                                });
                                 header = header.child(detail::hero(
                                     info,
                                     library.clone(),
                                     &covers,
                                     shell.clone(),
+                                    multi_select,
                                     cx,
                                 ));
                             }
@@ -440,26 +466,35 @@ fn chrome(
     rows: usize,
     collection: Option<CollectionId>,
 ) -> AnyElement {
-    div()
-        .flex_none()
-        .flex()
-        .flex_col()
-        .child(toolbar::toolbar(
+    // 搜索页没有头图的「更多操作」菜单，多选开关放在列头右端；
+    // 详情页的开关在头图菜单里，曲库页留在工具条里。
+    let header_selection = state.in_search && state.count > 0;
+    let toolbar_visible = !state.headed_elsewhere || state.scanning.is_some();
+
+    let mut column = div().flex_none().flex().flex_col();
+    if toolbar_visible {
+        column = column.child(toolbar::toolbar(
             library.clone(),
             list.clone(),
             state.clone(),
-        ))
-        .when(selecting, |column| {
-            column.child(batch::batch_bar(batch::BatchBar {
-                chosen_count,
-                selected,
-                rows,
-                collection,
-                library: library.clone(),
-                list,
-            }))
-        })
-        .child(row::column_header(&env))
+        ));
+    }
+    let trailing = header_selection
+        .then(|| toolbar::selection_toggle(list.clone(), selecting).into_any_element());
+
+    if selecting {
+        column = column.child(batch::batch_bar(batch::BatchBar {
+            chosen_count,
+            selected,
+            rows,
+            collection,
+            library: library.clone(),
+            list,
+        }));
+    }
+
+    column
+        .child(row::column_header(&env, trailing))
         .into_any_element()
 }
 

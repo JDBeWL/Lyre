@@ -43,7 +43,7 @@ use crate::common::tooltip;
 use crate::entities::LibraryEntity;
 use crate::icon::{Glyph, icon};
 use crate::platform::*;
-use crate::shell::NavSection;
+use crate::shell::{NavSection, ShellEntity};
 use crate::theme;
 
 /// 卡片封面右下角的悬浮播放键，只在 hover 时出现；`el_id` 由调用方保证唯一（同一首会同时出现在多个区块）。
@@ -98,5 +98,30 @@ pub(crate) fn card_play_button(
         .tooltip(tooltip::builder(format!("播放《{title}》")))
         .aria_label(format!("播放《{title}》"))
         .child(icon(Glyph::Play, 16., theme::text_on_control()))
+        .into_any_element()
+}
+
+/// 浮层右面板的关闭键。窄档下点击遮罩也能关，但需要一个看得见的明确出口。
+pub(crate) fn panel_close_button(el_id: &'static str, shell: &Entity<ShellEntity>) -> AnyElement {
+    let shell = shell.clone();
+    div()
+        .id(el_id)
+        .flex_none()
+        .size(px(28.))
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded_full()
+        .bg(theme::elevated())
+        .text_color(theme::text_muted())
+        .cursor_pointer()
+        .hover(|style| style.bg(theme::border()).text_color(theme::text()))
+        .on_click(move |_, _, cx| {
+            shell.update(cx, ShellEntity::close_panel);
+        })
+        .tooltip(tooltip::builder("关闭面板"))
+        .aria_label("关闭面板")
+        .role(Role::Button)
+        .child(icon(Glyph::Cross, 15., theme::text()))
         .into_any_element()
 }
