@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use crate::actions::*;
 use crate::common::toast::ToastEntity;
-use crate::components::{VolumeControl, detail};
+use crate::components::VolumeControl;
 use crate::entities::LibraryEntity;
 use crate::icon::{Glyph, icon};
 use crate::platform::*;
@@ -239,8 +239,9 @@ impl RootView {
             .flex()
             .flex_1()
             .min_h_0()
+            // 顶部不再单独留缝：顶栏与主区同色，那条缝并进了 `TOP_BAR_H`，
+            // 顶栏内容才能在这条整带里垂直居中。
             .px(px(theme::GUTTER))
-            .pt(px(theme::GUTTER))
             .gap(px(theme::GUTTER))
             // 这里不再包圆角裁剪：外层 overflow_hidden 会把侧栏内部两块卡片的圆角一起裁平
             .when(frame.sidebar != SidebarState::Hidden, |row| {
@@ -297,7 +298,8 @@ impl RootView {
                 .child(self.home.clone())
                 .into_any_element(),
             NavSection::Search => {
-                // 只有有查询词且命中曲目时才挂「歌曲」结果列表，否则整页由探索区自己滚动
+                // 有歌曲命中时整页交给 TrackList：搜索摘要、工具条与列表共用一个滚动区；
+                // 否则整页由探索区自己滚动
                 let has_query = App::update_entity(cx, &self.library, |library, _| {
                     (library.has_query(), library.visible_len())
                 });
@@ -305,10 +307,7 @@ impl RootView {
                     div()
                         .flex_1()
                         .min_h_0()
-                        .flex()
-                        .flex_col()
-                        .child(self.search_page.clone())
-                        .child(div().flex_1().min_h_0().child(self.track_list.clone()))
+                        .child(self.track_list.clone())
                         .into_any_element()
                 } else {
                     div()
@@ -320,28 +319,11 @@ impl RootView {
                         .into_any_element()
                 }
             }
-            NavSection::Tracks => {
-                // hero_for 找不到对应分组时（恢复历史带来的旧名字、已删除的歌单）退回纯列表。
-                // 整个 Scope 传进去：种类与标签分开传会在同名专辑 / 艺人上拿错头图
-                let hero = {
-                    let scope = self.library.read(cx).scope().clone();
-                    App::update_entity(cx, &self.library, |library, _| {
-                        detail::hero_for(library, &scope)
-                    })
-                };
-                let mut col = div().flex_1().min_h_0().flex().flex_col();
-                if let Some(info) = hero {
-                    col = col.child(detail::hero(
-                        &info,
-                        self.library.clone(),
-                        &self.covers,
-                        self.shell.clone(),
-                        cx,
-                    ));
-                }
-                col.child(div().flex_1().min_h_0().child(self.track_list.clone()))
-                    .into_any_element()
-            }
+            NavSection::Tracks => div()
+                .flex_1()
+                .min_h_0()
+                .child(self.track_list.clone())
+                .into_any_element(),
             NavSection::Albums | NavSection::Artists => div()
                 .flex_1()
                 .min_h_0()

@@ -196,8 +196,10 @@ pub const GAP_XL: f32 = 24.0;
 /// 留一半而不是更低：键盘光标的竖条也画在同一层里，压得太狠就找不着它了。
 pub const UNPLAYABLE_OPACITY: f32 = 0.5;
 
-/// 顶部栏高度：32px 的按钮 + 上下各 8px（窗口控件同尺寸，见 `window_controls`）。
-pub const TOP_BAR_H: f32 = 48.0;
+/// 顶部栏高度：32px 的按钮 + 上下各 12px（窗口控件同尺寸，见 `window_controls`）。
+/// 顶栏与主区同色，主区顶部原本那道 [`GUTTER`] 已并进来，算的是一整条视觉带的高度；
+/// 单独给主区留顶缝会让控件变成「上 8 下 16」，看起来压得偏高。
+pub const TOP_BAR_H: f32 = 56.0;
 pub const BOTTOM_BAR_H: f32 = 80.0;
 /// 底部控制栏在窄窗口下的高度（两行：传输区 + 进度条）。多出的 24px = 进度条行 22px + 一档间距。
 pub const BOTTOM_BAR_H_STACKED: f32 = 104.0;

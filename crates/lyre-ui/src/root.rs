@@ -43,8 +43,6 @@ pub struct RootView {
     lyrics: Entity<LyricsView>,
     /// 输入状态是 `search` 另建的一份，两者内容同步。
     search_page: Entity<SearchPage>,
-    /// 只持句柄、不 observe —— 需要封面的组件各自 observe；详情页头图要在 `render` 里现取封面。
-    covers: Entity<CoverCache>,
     sidebar: Entity<Sidebar>,
     bottom_bar: Entity<BottomBar>,
     top_bar: Entity<TopBar>,
@@ -106,16 +104,23 @@ impl RootView {
             cx.new(|cx| NowPlaying::new(playback.clone(), covers.clone(), library.clone(), cx));
         let mini =
             cx.new(|cx| MiniNowPlaying::new(playback.clone(), covers.clone(), library.clone(), cx));
-        let track_list =
-            cx.new(|cx| TrackList::new(library.clone(), shell.clone(), covers.clone(), cx));
+        let search_page =
+            cx.new(|cx| SearchPage::new(library.clone(), shell.clone(), covers.clone(), cx));
+        let track_list = cx.new(|cx| {
+            TrackList::new(
+                library.clone(),
+                shell.clone(),
+                covers.clone(),
+                search_page.clone(),
+                cx,
+            )
+        });
         let album_grid =
             cx.new(|cx| AlbumGrid::new(library.clone(), shell.clone(), covers.clone(), cx));
         let search = cx.new(|cx| SearchBox::new(window, library.clone(), cx));
         let sidebar = cx.new(|cx| Sidebar::new(shell.clone(), library.clone(), covers.clone(), cx));
         let home = cx.new(|cx| HomeView::new(shell.clone(), library.clone(), covers.clone(), cx));
         let lyrics = cx.new(|cx| LyricsView::new(playback.clone(), shell.clone(), cx));
-        let search_page =
-            cx.new(|cx| SearchPage::new(library.clone(), shell.clone(), covers.clone(), cx));
         let queue_panel = cx.new(|cx| QueuePanel::new(library.clone(), cx));
         let settings_panel = cx.new(|cx| {
             SettingsPanel::new(
@@ -367,7 +372,6 @@ impl RootView {
             home,
             lyrics,
             search_page,
-            covers,
             sidebar,
             bottom_bar,
             toast,

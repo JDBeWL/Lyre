@@ -12,6 +12,7 @@ use crate::theme;
 use super::{TrackList, TrackListEvent};
 
 /// 工具条渲染需要的全部数值，一次从曲库读出。
+#[derive(Clone)]
 #[allow(clippy::struct_excessive_bools)]
 pub(super) struct ToolbarState {
     /// 可见行数（过滤生效时小于 `total`）
