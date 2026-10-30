@@ -44,7 +44,7 @@ impl NowPlaying {
         // 而 gpui 的 `notify` 是全树失效；逐帧进度归 `SeekBar` / `VolumeControl`。
         let track_sub = cx.subscribe(&playback, |this, _, event: &PlaybackEvent, cx| {
             match event {
-                PlaybackEvent::TrackChanged => {
+                PlaybackEvent::TrackChanged | PlaybackEvent::Restored => {
                     this.refresh_covers(cx);
                     cx.notify();
                 }

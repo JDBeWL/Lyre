@@ -69,6 +69,17 @@ impl IconButton {
         self
     }
 
+    /// 选中态：绿色图标 + 淡绿底。只靠白 / 灰两档认不出开关是开是关。
+    pub fn active(mut self, active: bool) -> Self {
+        if active {
+            self.base_bg = theme::accent_soft();
+            self.hover_bg = theme::accent_soft();
+            self.color = theme::accent_text();
+            self.hover_color = theme::accent_hover();
+        }
+        self
+    }
+
     pub fn on_click(
         mut self,
         handler: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,

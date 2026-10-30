@@ -32,7 +32,9 @@ impl Transport {
         let subscription = cx.subscribe(
             &playback,
             |this, _, event: &PlaybackEvent, cx| match event {
-                PlaybackEvent::StateChanged | PlaybackEvent::TrackChanged => {
+                PlaybackEvent::StateChanged
+                | PlaybackEvent::TrackChanged
+                | PlaybackEvent::Restored => {
                     let playback = this.playback.read(cx);
                     this.playing = playback.is_playing();
                     this.has_track = playback.current().is_some();

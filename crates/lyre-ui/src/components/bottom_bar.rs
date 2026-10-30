@@ -155,7 +155,6 @@ impl Render for BottomBar {
         let queue_open = panel == Some(PanelTab::Queue);
         let lyrics_open = self.shell.read(cx).shows_lyrics();
 
-        // 全屏项还没有后端支撑，仍是明确的禁用态占位。
         let right = |fixed_width: Option<f32>| {
             let now_playing =
                 crate::common::button::IconButton::new("bar-now-playing", Glyph::PanelRight)
@@ -164,13 +163,9 @@ impl Render for BottomBar {
                     } else {
                         "先导入音乐才能查看"
                     })
-                    .box_size(28.)
-                    .glyph_size(15.)
-                    .color(if now_playing_open {
-                        theme::text()
-                    } else {
-                        theme::text_muted()
-                    })
+                    .box_size(32.)
+                    .glyph_size(16.)
+                    .active(now_playing_open)
                     .enabled(enabled)
                     .on_click({
                         let shell = self.shell.clone();
@@ -188,13 +183,9 @@ impl Render for BottomBar {
                 } else {
                     "歌词"
                 })
-                .box_size(28.)
-                .glyph_size(15.)
-                .color(if lyrics_open {
-                    theme::text()
-                } else {
-                    theme::text_muted()
-                })
+                .box_size(32.)
+                .glyph_size(16.)
+                .active(lyrics_open)
                 .enabled(enabled)
                 .on_click({
                     let shell = self.shell.clone();
@@ -210,13 +201,9 @@ impl Render for BottomBar {
                 } else {
                     "先导入音乐才能查看队列"
                 })
-                .box_size(28.)
-                .glyph_size(15.)
-                .color(if queue_open {
-                    theme::text()
-                } else {
-                    theme::text_muted()
-                })
+                .box_size(32.)
+                .glyph_size(16.)
+                .active(queue_open)
                 .enabled(enabled)
                 .on_click({
                     let shell = self.shell.clone();
@@ -229,8 +216,8 @@ impl Render for BottomBar {
             let devices = crate::common::menu::dropdown(
                 crate::common::button::IconButton::new("bar-devices", Glyph::Devices)
                     .label("播放设备")
-                    .box_size(28.)
-                    .glyph_size(15.)
+                    .box_size(32.)
+                    .glyph_size(16.)
                     .render(),
                 Anchor::TopRight,
                 {
@@ -239,26 +226,18 @@ impl Render for BottomBar {
                     move |menu, _window, cx| device_menu(menu, &playback, &settings, cx)
                 },
             );
-            let fullscreen =
-                crate::common::button::IconButton::new("bar-fullscreen", Glyph::Fullscreen)
-                    .label("全屏（即将推出）")
-                    .box_size(28.)
-                    .glyph_size(15.)
-                    .enabled(false)
-                    .render();
 
             let mut group = div()
                 .flex_none()
                 .flex()
                 .items_center()
                 .justify_end()
-                .gap(px(theme::GAP_XS))
+                .gap(px(theme::GAP_SM))
                 .child(now_playing)
                 .child(lyrics)
                 .child(queue)
                 .child(devices)
-                .child(self.volume.clone())
-                .child(fullscreen);
+                .child(self.volume.clone());
 
             if let Some(width) = fixed_width {
                 group = group.w(px(width));
@@ -357,11 +336,7 @@ fn mode_group(
         } else {
             "随机播放：关"
         })
-        .color(if shuffle {
-            theme::text()
-        } else {
-            theme::text_muted()
-        })
+        .active(shuffle)
         .enabled(enabled)
         .on_click({
             let library = library.clone();
@@ -380,11 +355,7 @@ fn mode_group(
         } else {
             "循环：关"
         })
-        .color(if repeat_active {
-            theme::text()
-        } else {
-            theme::text_muted()
-        })
+        .active(repeat_active)
         .enabled(enabled)
         .on_click({
             let library = library.clone();

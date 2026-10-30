@@ -172,8 +172,10 @@ impl RootView {
                 PlaybackEvent::StateChanged => {
                     resume::save_resume(&this.playback, &this.settings, cx);
                 }
+                // `Restored` 只是把上次那首装回来，不算一次播放，也不能把还没生效的 0 秒写回存档；
                 // 输出模式与设备列表由设置面板、底栏各自订阅刷新
-                PlaybackEvent::VolumeChanged
+                PlaybackEvent::Restored
+                | PlaybackEvent::VolumeChanged
                 | PlaybackEvent::DevicesChanged
                 | PlaybackEvent::OutputModeChanged => {}
             }

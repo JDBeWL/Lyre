@@ -21,6 +21,8 @@ const PUMP_INTERVAL: Duration = Duration::from_millis(100);
 pub enum PlaybackEvent {
     /// 换曲了（含首次装载）
     TrackChanged,
+    /// 启动续播把上次那首装回来了，停在存档位置。与 `TrackChanged` 的区别是这不算一次播放。
+    Restored,
     /// 播放 / 暂停状态变了
     StateChanged,
     /// 音量变了
@@ -253,8 +255,9 @@ impl PlaybackEntity {
         cx.notify();
     }
 
-    /// 启动续播专用：装载并跳位，但不发 `TrackChanged`。
-    /// 异步加载完成后订阅已经建立，普通 `load` 会在播放实体仍被可变借用时同步回调根视图。
+    /// 启动续播专用：装载并跳位，只发 `Restored` 不发 `TrackChanged`。
+    /// 根视图靠这个区分「用户点了播放」与「装回上次那首」，否则会记一次播放、并把尚未生效的
+    /// 0 秒写回 `resume.json`。
     pub fn restore(&mut self, track: Track, position: Duration, cx: &mut Context<Self>) {
         self.error = None;
         self.state = PlaybackState::Paused;
@@ -265,6 +268,7 @@ impl PlaybackEntity {
         });
         self.send(PlayerCommand::Seek(position));
         self.current = Some(track);
+        cx.emit(PlaybackEvent::Restored);
         cx.notify();
     }
 

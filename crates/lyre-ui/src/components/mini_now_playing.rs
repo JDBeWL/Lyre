@@ -50,7 +50,7 @@ impl MiniNowPlaying {
     ) -> Self {
         // 只订阅语义事件，不用 `observe`：播放期间进度通知是 10Hz，而 gpui 的一次 `notify` 让整棵树失效。
         let track_sub = cx.subscribe(&playback, |this, _, event: &PlaybackEvent, cx| {
-            if matches!(event, PlaybackEvent::TrackChanged) {
+            if matches!(event, PlaybackEvent::TrackChanged | PlaybackEvent::Restored) {
                 this.sync(cx);
             }
         });

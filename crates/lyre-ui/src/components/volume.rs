@@ -147,7 +147,7 @@ impl Render for VolumeControl {
         let speaker = div()
             .id("volume-mute")
             .flex_none()
-            .size(px(28.))
+            .size(px(32.))
             .flex()
             .items_center()
             .justify_center()
