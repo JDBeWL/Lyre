@@ -26,7 +26,6 @@ impl Likes {
         }
     }
 
-    /// 写回磁盘。失败只记日志，不影响调用方。
     pub fn save(&self) {
         // 集合无序，排序后写盘让文件在两次保存之间稳定。
         let mut ids: Vec<TrackId> = self.ids.iter().copied().collect();

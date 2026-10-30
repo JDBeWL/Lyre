@@ -1,5 +1,4 @@
 //! Lyre 入口。
-// 这样可以在不依赖 GPUI 的情况下编译 `lyre-ui`，也方便后续替换 GPUI。
 // 防止Windows下的panic弹窗挡住日志，panic信息无法收集，以及关闭release下的命令行窗口。
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
@@ -33,7 +32,7 @@ fn main() {
             ..Default::default()
         };
 
-        // 开窗若失败就记日志退出，不 panic ，release 下没有控制台，但是能记录进日志。
+        // 开窗失败只记日志退出，不 panic：release 下没有控制台。
         if let Err(err) = cx.open_window(options, |window, cx| {
             let view = cx.new(|cx| RootView::new(window, cx));
 

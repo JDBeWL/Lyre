@@ -451,8 +451,6 @@ fn fnv1a(bytes: &[u8]) -> u64 {
 
 #[cfg(test)]
 mod tests {
-    // 不能写 `use super::*`：glob 会把 gpui 导出的同名 `test` 过程宏带进来，
-    // 遮蔽内置 `#[test]` 并报 `recursion limit reached while expanding #[test]`。
     #[test]
     fn fnv1a_is_stable_and_distinguishes_inputs() {
         assert_eq!(super::fnv1a(b"cover"), super::fnv1a(b"cover"));

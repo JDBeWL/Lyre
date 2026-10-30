@@ -159,7 +159,6 @@ impl WavPackSource {
     }
 
     pub fn source_channels(&self) -> u16 {
-        // 没有下混，输出声道数就是声源声道数
         self.channels()
     }
 
@@ -257,10 +256,8 @@ impl Iterator for WavPackSource {
     }
 }
 
-/// 按 `ck_size` 走块链，返回只包含音频块的那一段。
-///
-/// 块 = `wvpk` + 4 字节 `ck_size` + `ck_size` 字节内容。走到魔数不是 `wvpk` 就停 ——
-/// 那后面是 `APEv2` 标签之类的东西，解码器遇到它会报错而不是当流结束。
+/// 按 `ck_size` 走块链，返回只含音频块的那一段：块 = `wvpk` + 4 字节长度 + 内容。
+/// 魔数不是 `wvpk` 就停：后面是 `APEv2` 标签，解码器遇到会报错而不是当流结束。
 fn trim_trailing_tag(bytes: &[u8]) -> &[u8] {
     let mut offset = 0usize;
     while offset + HEADER_LEN <= bytes.len() {

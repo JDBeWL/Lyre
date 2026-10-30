@@ -122,7 +122,7 @@ pub(super) fn recent_card(
     let group = SharedString::from(format!("home-recent-g-{index}"));
     let cover = cover_slot(covers, library, id, RECENT_COVER, &card.album, cx);
     let play_title = card.album.clone();
-    // 点这张卡 = 播这张专辑，所以队列按专辑名定；`card.album` 还要给标题用，各自 clone
+    // 点卡 = 播整张专辑，队列按专辑名定。
     let queue_album = card.album.clone();
     let subtitle = if card.artist.is_empty() {
         card.meta.clone()
@@ -191,7 +191,6 @@ pub(super) fn recent_card(
         .into_any_element()
 }
 
-/// 一个横向滚动区块的外壳：标题（带左右箭头）+ 一排可横向滚动的卡，卡片由调用方造好传进来。
 fn scroll_row(
     id: &'static str,
     title: &'static str,
@@ -289,7 +288,6 @@ fn row_arrow(
         .into_any_element()
 }
 
-/// 一个横向滚动区块：一排专辑海报卡。
 pub(super) fn horizontal_section(
     id: &'static str,
     title: &'static str,
@@ -552,7 +550,6 @@ mod tests {
         assert!(unmeasured.can_go(true), "未测量时右箭头要可用");
     }
 
-    /// 一屏装得下：`max_offset` 为 0，两个方向同时到头 —— 两枚都该灰。
     #[test]
     fn a_row_that_fits_disables_both_arrows() {
         let edges = RowEdges::of(600.0, 0.0, 0.0);
@@ -570,7 +567,6 @@ mod tests {
         assert!(!at_right.can_go(true), "在最右边，右箭头该灰");
     }
 
-    /// 容差两侧都要验：太宽会让箭头永远灰不下去，太紧会在还有卡片时就灰掉。
     #[test]
     fn the_end_tolerance_is_half_a_pixel() {
         assert!(!RowEdges::of(600.0, -899.7, 900.0).can_go(true));

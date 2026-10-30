@@ -23,9 +23,7 @@ pub enum PlaybackEvent {
     TrackChanged,
     /// 启动续播把上次那首装回来了，停在存档位置。与 `TrackChanged` 的区别是这不算一次播放。
     Restored,
-    /// 播放 / 暂停状态变了
     StateChanged,
-    /// 音量变了
     VolumeChanged,
     /// 可用设备列表或当前输出设备变了
     DevicesChanged,
@@ -219,7 +217,6 @@ impl PlaybackEntity {
         &self.devices
     }
 
-    /// 当前输出设备标识；`None` 表示跟随系统默认。
     pub fn current_device(&self) -> Option<&str> {
         self.device.as_deref()
     }

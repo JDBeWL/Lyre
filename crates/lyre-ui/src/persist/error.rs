@@ -3,7 +3,6 @@
 use std::io;
 use std::path::PathBuf;
 
-/// 持久化操作可能出现的错误。
 #[derive(Debug, thiserror::Error)]
 pub enum PersistError {
     /// 找不到可用的数据目录（`APPDATA` / `HOME` 等环境变量缺失）。

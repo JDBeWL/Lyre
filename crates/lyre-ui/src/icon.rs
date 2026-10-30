@@ -151,7 +151,6 @@ pub fn icon_inherit(glyph: Glyph, size: f32) -> impl IntoElement {
         .with_size(px(size))
 }
 
-/// 取图标的 SVG 源码。填充类返回手写字面量，其余走生成的数据。
 fn svg_source(glyph: Glyph) -> &'static str {
     match glyph {
         Glyph::Play => filled!(

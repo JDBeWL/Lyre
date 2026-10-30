@@ -65,7 +65,6 @@ pub fn cover_state(
     }
 }
 
-/// 只要位图：`Ready` 给图，其余一律 `None`。
 pub fn cover_image(
     covers: &Entity<CoverCache>,
     library: &Entity<LibraryEntity>,
@@ -187,7 +186,6 @@ pub fn image_cell(image: Arc<RenderImage>, size: f32, radius: f32) -> AnyElement
         .into_any_element()
 }
 
-/// 按名字派生的渐变块。
 fn derived_cover(size: f32, radius: f32, seed: &str) -> AnyElement {
     div()
         .flex_none()

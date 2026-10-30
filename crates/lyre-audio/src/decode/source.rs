@@ -53,8 +53,7 @@ pub enum WhenEmpty {
     /// 亏欠只有一次回调那么多（几十毫秒以内），代价可以接受。
     PadWithSilence,
     /// 先等一等真样本（最长 `WAIT_LIMIT`），等不到才兜底吐静音。
-    /// 给独占输出的推送线程用：它不在实时线程上，快过解码线程是常态
-    /// （实测 FLAC 开头会被灌进约 480ms、WavPack 约 2.5s 的补白），补白进了环就成了曲子里的沉默段。
+    /// 给独占输出的推送线程用：它不在实时线程上，快过解码线程是常态，补白进了环就成了曲子里的沉默段。
     Wait,
 }
 
@@ -82,7 +81,6 @@ impl LockFreeSource {
         let total_duration = decoder.total_duration();
 
         // 起线程之前先解一段出来，避免音频回调一上来就饿着。
-        // 解不开必须报错：吞掉它这首会一上来就「放完」，列表循环时像队列在无声快进。
         decoder.prefill()?;
 
         let (sender, receiver) = bounded(CHANNEL_CAPACITY_CHUNKS);
@@ -152,7 +150,6 @@ impl LockFreeSource {
         })
     }
 
-    /// 解码线程是否已经收工。
     pub fn producer_finished(&self) -> bool {
         self.producer_finished.load(Ordering::Acquire)
     }
@@ -313,7 +310,6 @@ mod tests {
         }
     }
 
-    /// 实时回调那条路只能吐静音顶上：回调里不能阻塞。
     #[test]
     fn padding_mode_hands_out_silence_instead_of_waiting() {
         let (_sender, receiver) = bounded(4);
@@ -323,7 +319,6 @@ mod tests {
         assert!(source.is_stalled(), "吐了静音就该报欠载");
     }
 
-    /// 独占推送线程那条路要**等**真样本：它吐出来的静音会变成曲子里的沉默段。
     #[test]
     fn waiting_mode_waits_for_real_samples_instead_of_inventing_silence() {
         let (sender, receiver) = bounded(4);
@@ -354,7 +349,6 @@ mod tests {
         assert_eq!(got, vec![1.0, 2.0, 3.0]);
     }
 
-    /// 解码线程收工且通道已空 = 这首放完了，`Wait` 不能在这儿一直等下去。
     #[test]
     fn waiting_mode_ends_instead_of_waiting_forever() {
         let (_sender, receiver) = bounded(4);
@@ -362,7 +356,6 @@ mod tests {
         assert_eq!(source.next(), None);
     }
 
-    /// 发送端全没了也当放完，不该卡在等里头。
     #[test]
     fn waiting_mode_ends_when_the_sender_is_gone() {
         let (sender, receiver) = bounded::<Vec<f32>>(4);
@@ -371,7 +364,6 @@ mod tests {
         assert_eq!(source.next(), None);
     }
 
-    /// 换块时旧块必须送回解码线程，不能在音频回调线程上 drop 整块内存。
     #[test]
     fn consumed_blocks_are_handed_back_for_reuse() {
         let (sender, receiver) = bounded(4);

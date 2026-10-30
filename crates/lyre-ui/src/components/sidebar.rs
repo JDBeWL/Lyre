@@ -52,13 +52,11 @@ impl Sidebar {
         }
     }
 
-    /// 下卡片该列什么：手动筛选优先，否则跟随主区区段。
     fn effective_listing(&self, nav: NavSection) -> Listing {
         self.listing_override
             .unwrap_or_else(|| entries::listing_for(nav))
     }
 
-    /// Chip 点击：切到指定粒度，覆盖「跟随主区」。
     fn set_listing(&mut self, listing: Listing, cx: &mut Context<Self>) {
         if self.listing_override != Some(listing) {
             self.listing_override = Some(listing);
@@ -142,7 +140,6 @@ mod tests {
 
     #[test]
     fn tracks_section_lists_artists_not_albums() {
-        // 改回专辑不会报错，只会侧栏和主区对不上。
         assert_eq!(
             listing_for(NavSection::Tracks),
             Listing::Artists,
@@ -158,7 +155,6 @@ mod tests {
 
     #[test]
     fn every_section_has_a_listing() {
-        // 显式列出五个变体：有「全部」常量时，新增忘了加进数组就检不出来。
         let all = [
             NavSection::Home,
             NavSection::Tracks,

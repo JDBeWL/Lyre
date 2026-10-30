@@ -187,7 +187,6 @@ fn nav_button(
 
 type NavClick = Box<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static>;
 
-/// 设置入口：右端那颗齿轮。
 fn settings_button(
     shell: Entity<ShellEntity>,
     library: Entity<LibraryEntity>,

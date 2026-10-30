@@ -250,7 +250,6 @@ impl Render for QueuePanel {
     }
 }
 
-/// 队列列表里的一项：曲目或分段标签。
 #[derive(Clone, Copy)]
 enum QueueEntry {
     /// 一行曲目。`number` 是显示序号，按曲目数而不是行数递增 —— 分段标签占一行但不占号。
@@ -403,7 +402,6 @@ fn empty_queue(total: usize) -> AnyElement {
         .into_any_element()
 }
 
-/// 一行在队列里的身份。
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum RowKind {
     Played,

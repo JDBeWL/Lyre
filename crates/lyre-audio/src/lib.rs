@@ -40,8 +40,7 @@ pub struct AudioHandle {
     _owner: Arc<OwnerGuard>,
 }
 
-/// 句柄族的生命周期。克隆之间共享它，最后一个析构时发 `Shutdown`；
-/// 设备监视线程也挂在这里，随 owner 一起收工。
+/// 设备监视线程挂在这里，随最后一个句柄一起收工。
 struct OwnerGuard {
     tx: Sender<PlayerCommand>,
     _monitor: DeviceMonitor,

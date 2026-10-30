@@ -17,7 +17,6 @@ use crate::theme;
 const LINE_BOX_RATIO: f32 = 1.3;
 /// 药丸的上下内边距，左右用 `GAP_LG`。
 const PILL_PAD_Y: f32 = theme::GAP_XS;
-/// 相邻两行药丸之间的空隙。
 const ROW_GAP: f32 = theme::GAP_SM;
 /// 整列共用的基准字号档位，从大到小取第一个放得下典型长句的一档。
 const BASE_TIERS: [f32; 3] = [theme::FONT_HERO, 26.0, 22.0];
@@ -30,7 +29,7 @@ const LONG_LINE_EM: f32 = 20.0;
 const IDLE_RATIO: f32 = 0.7;
 /// 邻行字号的可读下限。基准最低 22，`22 × 0.7 = 15.4` 会撞到它。
 const IDLE_FLOOR: f32 = 16.0;
-/// 译文相对原文的固定字号差。
+/// 译文相对原文的字号差，单位 px。
 const TRANSLATION_STEP: f32 = 4.0;
 /// 邻行按距离衰减的不透明度 —— gpui 的元素样式没有 `blur`，用它代替雾化。
 const OPACITY_NEAR: f32 = 0.5;
@@ -47,9 +46,7 @@ const SCROLL_SPRING: SpringConfig = SpringConfig::new(180.0, 26.0, 1.0);
 
 #[derive(Clone, Debug)]
 enum Loaded {
-    /// 什么都没装载
     Idle,
-    /// 正在后台读侧文件
     Loading,
     Ready(Rc<Lyrics>),
     /// 确认没有同名 `.lrc` / `.ass`，或读不出内容
@@ -165,7 +162,6 @@ impl LyricsView {
     }
 }
 
-/// 点击任意一行 → 跳到它的起始时刻。
 fn seek_handler(
     playback: &Entity<PlaybackEntity>,
     start: Duration,
@@ -213,14 +209,12 @@ fn idle_size(budget: f32) -> f32 {
     (active_size(budget) * IDLE_RATIO).round().max(IDLE_FLOOR)
 }
 
-/// 一行文字在给定字号下要占几个视觉行。
 fn visual_rows(text: &str, size: f32, budget: f32, bold: bool) -> usize {
     (text_width(text, size, bold) / budget.max(1.0))
         .ceil()
         .max(1.0) as usize
 }
 
-/// 译文跟着原文缩，只固定差 [`TRANSLATION_STEP`] px。
 fn translation_size(original: f32) -> f32 {
     original - TRANSLATION_STEP
 }
@@ -659,7 +653,7 @@ mod tests {
         }
     }
 
-    /// 宽到够得着最大档的预算（1920px 最大化窗口实测约 1570px）。
+    /// 宽到够得着最大档的预算。
     const WIDE: f32 = 1500.0;
     /// 最小窗口（560 宽、侧栏收成图标条）时的预算。
     const NARROW: f32 = 150.0;

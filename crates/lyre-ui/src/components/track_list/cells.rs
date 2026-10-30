@@ -78,7 +78,6 @@ pub(super) fn title_cell(
     track_id: TrackId,
     cx: &mut App,
 ) -> impl IntoElement {
-    // 40px 的行高塞不下两行，双行只在舒适密度出现
     let two_lines = env.row_height >= TWO_LINE_MIN;
     let artist = track.artist.clone().unwrap_or_default();
     let thumb_size = if two_lines { THUMB } else { THUMB_COMPACT };
@@ -260,7 +259,6 @@ pub(super) fn album_cell(
         .text_color(theme::text_muted());
 
     if known {
-        // 闭包是 `move` 的，点击目标与显示各要一份。
         let target = text.clone();
         cell = cell.child(
             div()
@@ -287,7 +285,6 @@ fn artist_sep() -> AnyElement {
     div().flex_none().child(" / ").into_any_element()
 }
 
-/// 行尾操作区：收藏（♡/♥）+ 更多（⋯）+ 移除（✕）。
 /// 更多与移除悬停才浮现，显隐由 `group_hover` 驱动而不是视图状态。
 #[allow(clippy::too_many_arguments)]
 pub(super) fn actions_cell(

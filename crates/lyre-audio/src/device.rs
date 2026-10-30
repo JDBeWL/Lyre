@@ -69,7 +69,6 @@ pub fn device_name(id: &str) -> Option<String> {
         .map(|device| device.name)
 }
 
-/// 当前系统默认输出设备的标识。
 pub fn default_device_id() -> Option<String> {
     cpal::default_host()
         .default_output_device()

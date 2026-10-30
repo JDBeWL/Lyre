@@ -16,9 +16,7 @@ pub struct SampleRing {
     /// 世代号，[`SampleRing::invalidate`] 每调用一次加一。
     epoch: AtomicU64,
     /// 最近一次作废时环里的存量样本数，它们全部属于被作废的那一代。
-    ///
-    /// 发布顺序不能反：写入端先写 `stale` 再发布 `epoch`（release），读取端先读 `epoch`
-    /// （acquire）再读 `stale`，否则新世代号配上旧存量会把刚写进来的样本一起丢掉。
+    /// 写入端先写 `stale` 再 release 发布 `epoch`，读取端先 acquire 读 `epoch` 再读 `stale`；反了会把新写入的样本一起丢掉。
     stale: AtomicUsize,
 }
 
@@ -123,7 +121,6 @@ impl RingWriter {
 }
 
 impl RingReader {
-    /// 环里还有多少样本可读。
     pub fn pending(&self) -> usize {
         self.consumer.slots()
     }

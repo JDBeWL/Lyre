@@ -31,10 +31,8 @@ const fn chunk_frames(sample_rate: u32) -> usize {
     }
 }
 
-/// 喂料状态。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Feed {
-    /// 正常拉取源数据
     Data,
     /// 源已耗尽，还剩 n 块静音要喂
     Drain(usize),
@@ -59,7 +57,6 @@ pub struct RubatoResampleSource<S> {
     fed_frames: usize,
     /// 源读完之后按比例算出的目标总帧数。到这儿就收工 —— 补齐的静音不该算进时长。
     total_frames: Option<usize>,
-    /// 已经吐出去的帧数。
     out_frames: usize,
     /// 源读完之后还要喂几块静音，由重采样器的延迟算出来。
     flush_chunks: usize,

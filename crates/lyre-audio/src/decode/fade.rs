@@ -39,7 +39,6 @@ impl Default for GainControl {
     }
 }
 
-/// 在音源外面套一层增益包络。
 pub struct GainRamp<S> {
     inner: S,
     control: Arc<GainControl>,

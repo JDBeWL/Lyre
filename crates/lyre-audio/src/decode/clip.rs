@@ -7,7 +7,6 @@ use rodio::{ChannelCount, SampleRate};
 
 use super::dsp;
 
-/// 在音源外面套一层软削波。
 pub struct SoftClip<S> {
     inner: S,
 }

@@ -1,6 +1,5 @@
-//! 键盘光标：`↑↓` 只移动光标，`Enter` 才播。默认跟着播放走（[`LibraryEntity::follow_playback`]）。
-//! 键盘路径的光标变动都走 [`LibraryEntity::set_focus`]，
-//! 它是 [`super::LibraryEvent::FocusMoved`] 的唯一发出者。
+//! 键盘光标：`↑↓` 只移动光标，`Enter` 才播；默认跟着播放走（[`LibraryEntity::follow_playback`]）。
+//! 光标变动都走 [`LibraryEntity::set_focus`]，它是 [`super::LibraryEvent::FocusMoved`] 的唯一发出者。
 
 use lyre_core::{Track, TrackId};
 
@@ -13,7 +12,6 @@ impl LibraryEntity {
         self.focus
     }
 
-    /// 光标底色该不该画。
     pub fn shows_cursor(&self) -> bool {
         self.cursor_visible
     }

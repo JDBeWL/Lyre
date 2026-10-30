@@ -12,14 +12,12 @@ pub fn load() -> Vec<Track> {
     prune_missing(persist::load_or_default(FILE))
 }
 
-/// 写回磁盘。失败只记日志 —— `%APPDATA%` 只读不该让播放器打不开。
 /// 用紧凑排版：整库条目可能上千，缩进会让文件涨好几倍。
 pub fn save(tracks: Vec<Track>) {
     persist::save_compact_lossy(FILE, tracks);
 }
 
 /// 一个都不在时要原样保留：那是盘没醒 / 可移动盘没挂载，照常剔除会把整库覆盖成空。
-/// 每个路径只查一次：先记下存在性，再根据「有没有一个活着」决定保留策略。
 fn prune_missing(tracks: Vec<Track>) -> Vec<Track> {
     prune_missing_with(tracks, std::path::Path::is_file)
 }
@@ -88,7 +86,6 @@ mod tests {
         dir
     }
 
-    /// 整库一个都不在 = 盘没挂载，不能当成文件被删而让下一次落盘把整库覆盖成空。
     #[test]
     fn a_whole_missing_drive_keeps_the_cache() {
         let dir = temp_dir("all-missing");

@@ -55,11 +55,7 @@ fn temp_wav(name: &str) -> (tempfile::TempDir, std::path::PathBuf) {
     (dir, path)
 }
 
-/// 独占推送线程那条路（`WhenEmpty::Wait`）不许把「补出来的静音」当内容交出来。
-///
-/// 推送线程拉得比解码线程快，通道一空就会拿到 `0.0`；这些 0 灌进采样环就成了曲子里的
-/// 沉默段 —— 旧行为下实测 FLAC 开头会掺进约 480ms、WavPack 约 2.5s 的补白，听感正是
-/// 「开头卡一下」或「前面少了半秒」。这里量整条链的头一批样本：素材是正弦，
+/// 独占推送线程那条路（`WhenEmpty::Wait`）不许交出补出来的静音：素材是正弦，
 /// 连续 ≥64 个恰好 0.0 只可能来自补白。
 #[test]
 fn the_head_of_a_track_never_gets_padded_with_invented_silence() {
@@ -266,7 +262,6 @@ fn seeking_past_the_end_does_not_panic() {
     write_wav(&path, 8_000, 2, 800, |_, _| 0.1);
 
     let mut decoder = SymphoniaDecoder::new(&path).unwrap();
-    // 短文件的预填充会因为提前到达 EOF 而返回失败，这是正常的，不是错误路径
     let _ = decoder.prefill();
     // 目标超出文件长度：允许报错，但绝不能 panic
     let _ = decoder.seek(Duration::from_secs(60));
@@ -408,11 +403,8 @@ fn dropping_the_source_releases_the_producer() {
     );
 }
 
-/// 扩展名不可信：把 APE 改名成 `.wav`，symphonia 的 MPEG 探测会把它**误判成 MP3** ——
-/// 报「OK 44100Hz/2ch」，解出来却是满刻度噪声。所以要按魔数路由到 APE 解码器。
-///
-/// 合成的字节不是合法 APE，所以会以解码错误收场。判据是**错误出自 APE 解码器**：
-/// 报 `Decode` 才说明确实走了 `ApeSource`，报 `Probe` 说明还在 symphonia 手里。
+/// 扩展名不可信：APE 改名成 `.wav` 会被 symphonia 的 MPEG 探测当成 MP3 帧同步，解出满刻度噪声。
+/// 判据是错误由 `ApeSource` 报出（`Decode`），不是 `Probe`。
 #[test]
 fn a_renamed_ape_goes_to_the_ape_decoder_instead_of_the_mpeg_probe() {
     let (_dir, path) = temp_wav("disguised.wav");

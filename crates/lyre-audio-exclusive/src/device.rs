@@ -1,6 +1,5 @@
 //! 独占格式协商与流初始化。
-//! 候选口径先要声源自己的采样率与声道数 —— 要到了就是位完美直出，要不到才按设备混音格式、再按常用档位往下降。
-//! 若从设备默认口径开始试，44.1k 素材落在 48k 设备上必然被重采样。
+//! 候选口径先要声源口径，要不到才按设备混音格式与常用档位退让。
 
 use std::time::Duration;
 
@@ -12,7 +11,6 @@ use wasapi::{
 
 use crate::error::{ExclusiveError, Result};
 
-/// 依次尝试的位深。
 const BIT_DEPTHS: [(usize, SampleType); 4] = [
     (32, SampleType::Float),
     (32, SampleType::Int),
@@ -20,7 +18,6 @@ const BIT_DEPTHS: [(usize, SampleType); 4] = [
     (16, SampleType::Int),
 ];
 
-/// 退让时依次尝试的采样率。
 const FALLBACK_RATES: [u32; 11] = [
     384_000, 352_800, 192_000, 176_400, 96_000, 88_200, 48_000, 44_100, 32_000, 22_050, 16_000,
 ];
@@ -73,8 +70,7 @@ pub struct ExclusiveStream {
     pub device_endpoint: String,
 }
 
-/// 渲染线程用到的设备操作。抽成 trait 是为了在用例里注入拔卡、设备被占用和写入失败，
-/// 真机路径仍由 [`ExclusiveStream`] 实现。
+/// 渲染线程的设备操作；真机实现是 [`ExclusiveStream`]。
 pub(crate) trait RenderStream {
     fn format(&self) -> ExclusiveFormat;
     fn device_name(&self) -> &str;

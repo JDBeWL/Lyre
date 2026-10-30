@@ -85,7 +85,6 @@ pub fn stroke_svg(glyph: Glyph) -> &'static str {
         ),
         Glyph::ChevronDown => wrap!(r#"  <path d="m6 9 6 6 6-6" />"#,),
         Glyph::ChevronRight => wrap!(r#"  <path d="m9 18 6-6-6-6" />"#,),
-        // 以下几项是手工加的，重新生成时会被覆盖掉。
         Glyph::ArrowLeft => wrap!(
             r#"  <path d="m12 19-7-7 7-7" />"#,
             r#"  <path d="M19 12H5" />"#,

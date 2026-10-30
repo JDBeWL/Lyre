@@ -16,7 +16,7 @@ pub fn chrome() -> Rgba {
     rgb(0x000000)
 }
 
-/// 侧边栏 / 右面板卡片的背景，与 [`bg`] 刻意同色，相等由测试钉住。
+/// 侧边栏 / 右面板卡片的背景，与 [`bg`] 刻意同色。
 pub fn panel() -> Rgba {
     rgb(0x121212)
 }
@@ -196,9 +196,7 @@ pub const GAP_XL: f32 = 24.0;
 /// 留一半而不是更低：键盘光标的竖条也画在同一层里，压得太狠就找不着它了。
 pub const UNPLAYABLE_OPACITY: f32 = 0.5;
 
-/// 顶部栏高度：32px 的按钮 + 上下各 12px（窗口控件同尺寸，见 `window_controls`）。
-/// 顶栏与主区同色，主区顶部原本那道 [`GUTTER`] 已并进来，算的是一整条视觉带的高度；
-/// 单独给主区留顶缝会让控件变成「上 8 下 16」，看起来压得偏高。
+/// 顶部栏高度：32px 按钮 + 上下各 12px，含主区顶部 [`GUTTER`]。
 pub const TOP_BAR_H: f32 = 56.0;
 pub const BOTTOM_BAR_H: f32 = 80.0;
 /// 底部控制栏在窄窗口下的高度（两行：传输区 + 进度条）。多出的 24px = 进度条行 22px + 一档间距。
@@ -295,7 +293,6 @@ fn contrast_ratio(foreground: Rgba, background: Rgba) -> f32 {
 
 #[cfg(test)]
 mod tests {
-    // 不用 glob 导入：`platform::*` 里的 gpui `test` 宏会遮蔽内置 `#[test]`，导致无限递归。
     use crate::platform::{Rgba, rgb};
 
     use super::contrast_ratio;
@@ -365,7 +362,6 @@ mod tests {
 
     #[test]
     fn window_close_button_uses_black_glyph_on_red() {
-        // 关闭键悬停是红底 + 叉；白叉达不到 AA，符号必须用 text_on_danger。
         assert_pass(
             super::text_on_danger(),
             super::danger(),
@@ -400,7 +396,6 @@ mod tests {
         assert!(bg > gap + 1e-6, "主区卡片必须比缝亮");
         assert!(bg > chrome + 1e-6, "主区卡片必须比窗口外壳亮");
 
-        // 三块卡片同色是有意的：侧栏调回纯黑会让那一侧的缝失效。
         assert_eq!(
             super::panel(),
             super::bg(),
@@ -531,7 +526,6 @@ mod tests {
 
     #[test]
     fn focus_ring_color_is_the_accent_token() {
-        // `BoxShadow` 只吃 `Hsla`，所以环的颜色是手写的 HSL；它必须与 `accent_text` 是同一个绿。
         let ring: Rgba = super::focus_ring_color().into();
         let accent = super::accent_text();
         for (name, a, b) in [

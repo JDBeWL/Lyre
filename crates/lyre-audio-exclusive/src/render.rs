@@ -521,7 +521,6 @@ fn ease(from: f32, target: f32, progress: f32) -> f32 {
     from + (target - from) * progress.clamp(0.0, 1.0)
 }
 
-/// 欠载统计。
 struct Underrun {
     samples: u64,
     since: Instant,
@@ -788,7 +787,6 @@ mod tests {
         assert_eq!(fade.advance(), FadeThen::Stop);
         assert_eq!(fade.factor, 0.0, "落点必须严格等于目标");
 
-        // 动作只执行一次
         assert_eq!(fade.advance(), FadeThen::Nothing);
     }
 

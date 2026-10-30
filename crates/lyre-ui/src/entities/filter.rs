@@ -46,12 +46,10 @@ pub fn narrow_in(fields: &[SearchFields], rows: &[usize], terms: &[String]) -> V
         .collect()
 }
 
-/// 把查询串按空白拆成词元，全部转小写（匹配大小写不敏感）。
 pub fn parse_query(query: &str) -> Vec<String> {
     query.split_whitespace().map(str::to_lowercase).collect()
 }
 
-/// 一首曲目是否命中全部词元，词元之间是 AND。
 pub fn matches(track: &Track, terms: &[String]) -> bool {
     terms.iter().all(|term| matches_term(track, term))
 }
@@ -79,7 +77,6 @@ fn contains_ci(haystack: &str, needle: &str) -> bool {
     if needle.is_empty() {
         return true;
     }
-    // 纯 ASCII 走字节滑窗。
     if haystack.is_ascii() && needle.is_ascii() {
         // `windows` 对「窗口比切片长」是直接 panic，不是返回空迭代器
         return needle.len() <= haystack.len()

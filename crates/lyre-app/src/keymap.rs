@@ -61,7 +61,6 @@ pub fn bind(cx: &mut App) {
 mod tests {
     use lyre_ui::shortcuts::CONTEXT;
 
-    /// 断言两个上下文不同，防止有人把它们合并回一个。
     #[test]
     fn browse_context_excludes_text_input_but_global_does_not() {
         use super::{BROWSE, GLOBAL};
@@ -76,8 +75,7 @@ mod tests {
         );
     }
 
-    /// 上下文串与 `RootView` 的 `key_context(..)` 必须同源。
-    /// 对不上不会报错，只会「所有快捷键没反应」—— 所以这里显式钉住。
+    /// 上下文串必须与 `RootView` 的 `key_context(..)` 同源，否则所有快捷键静默失效。
     #[test]
     fn both_contexts_are_built_on_the_shared_name() {
         use super::{BROWSE, GLOBAL};

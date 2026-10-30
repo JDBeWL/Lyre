@@ -528,7 +528,6 @@ fn dropping_the_handle_shuts_the_thread_down() {
 
     drop(handle);
 
-    // 句柄 drop 后线程退出，事件发送端随之关闭
     let deadline = Instant::now() + Duration::from_secs(3);
     let mut disconnected = false;
     while Instant::now() < deadline {

@@ -498,7 +498,6 @@ fn chrome(
         .into_any_element()
 }
 
-/// 曲目数为 0 时的占位内容。
 fn empty_body(
     loading: bool,
     total: usize,
@@ -528,7 +527,6 @@ fn empty_body(
 struct RowEnv {
     /// 行高，来自密度设置；`uniform_list` 用它算每一项的位置
     row_height: f32,
-    /// 画不画专辑列：断点允许、且不在专辑详情里
     show_album: bool,
     /// 作用域种类，决定副标题省哪段、列头第二段写谁
     kind: ScopeKind,

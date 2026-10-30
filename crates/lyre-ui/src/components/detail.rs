@@ -448,7 +448,7 @@ fn play_button(info: &HeroInfo, library: Entity<LibraryEntity>) -> AnyElement {
         .into_any_element()
 }
 
-/// 封面槽：命中就显示图片，否则请求 + 占位。取图走 [`crate::common::cover::cover_image`]。
+/// 封面槽：命中就显示图片，否则请求 + 占位。取图走 [`crate::common::cover::cover_state`]。
 /// 不能绕开它里的 `is_missing` 那一档，否则没有封面的专辑会每帧重发请求。
 fn cover_slot(
     covers: &Entity<CoverCache>,

@@ -91,7 +91,6 @@ impl ShellEntity {
     }
 
     pub fn toggle_sidebar(&mut self, cx: &mut Context<Self>) {
-        // 首次点击从当前生效形态起循环
         let current = self.sidebar();
         let next = match current {
             SidebarState::Expanded => SidebarState::Icons,
@@ -111,7 +110,6 @@ impl ShellEntity {
         } else {
             Some(tab)
         };
-        // 右面板那 320px 的开合改变网格可用宽度，列数必须同步重算。
         self.recompute_grid_columns();
         cx.notify();
     }
@@ -141,11 +139,9 @@ impl ShellEntity {
             self.right_panel = settings.default_panel;
         }
         if let Some(sidebar) = settings.default_sidebar {
-            // 这里不特判窄档：`sidebar()` 已取与断点默认里更收起的那个。
             self.sidebar_override = Some(sidebar);
         }
 
-        // 面板与侧栏的开合都改变网格可用宽度，列数必须同步重算。
         self.recompute_grid_columns();
         cx.notify();
     }

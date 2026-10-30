@@ -1,8 +1,6 @@
-//! `lyre-core` 的端到端集成测试：扫描 → 读标签 → 入队 → 分组 → 排序 / 撤销。
-//! 钉的是跨模块契约：扫描出的路径要被 `Playlist::push` 接受，`tracks()` 要能被分组函数消费，
-//! 移出再回插要能复原。不需要真实音频，读不出标签的文件会退化成 [`Track::fallback`]。
-//!
-//! `clippy.toml` 的 `allow-*-in-tests` 不覆盖 `tests/` 下的独立集成测试 crate，故在此显式允许。
+//! `lyre-core` 端到端测试：扫描 → 读标签 → 入队 → 分组 → 排序 / 撤销。
+//! 钉跨模块契约：扫描路径进 `Playlist::push`，`tracks()` 供分组，移出再回插可复原。
+//! `clippy.toml` 的 `allow-*-in-tests` 不覆盖独立集成测试 crate，故此处显式允许。
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use std::fs;

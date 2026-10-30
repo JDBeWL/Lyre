@@ -143,7 +143,6 @@ fn build_source_for(
     let source_channels =
         std::num::NonZeroU16::new(decoder.channels()).unwrap_or(ChannelCount::MIN);
 
-    // rodio 的 mixer 在音频回调线程上拉，那里不能阻塞：通道空着只能吐静音顶住
     let source = LockFreeSource::new(decoder, WhenEmpty::PadWithSilence)?;
 
     // 这一步只对齐采样率、保持声道：LFE 低通要按声源的采样率算，必须排在下混之前。

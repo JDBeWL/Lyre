@@ -1,5 +1,4 @@
 //! 专辑 / 艺术家的惰性分组缓存：分组是整库 O(n log n) 扫描，只在读时重算。
-//! 曲目集合一变就由 [`LibraryEntity::invalidate`] 置空，每个改动出口都必须调它。
 
 use std::rc::Rc;
 

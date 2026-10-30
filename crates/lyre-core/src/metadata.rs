@@ -15,7 +15,6 @@ pub struct Cover {
     pub mime: Option<String>,
 }
 
-/// 读取一首曲目的元数据。
 pub fn read_track(path: &Path) -> Result<Track> {
     let tagged = Probe::open(path)
         .map_err(|source| CoreError::Tag {

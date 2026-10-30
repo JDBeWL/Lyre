@@ -29,7 +29,6 @@ pub use scope::{FAVORITES_NAME, Scope, ScopeKind};
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum LibraryEvent {
-    /// 该开始播这一首了
     Play(Track),
     /// 键盘光标移到了第 `usize` 行。滚动是副作用，不能放在 render 里做，只能用事件推到明确时机。
     FocusMoved(usize),
@@ -38,7 +37,10 @@ pub enum LibraryEvent {
     /// 作用域真的换了才发：`set_scope` 是唯一发出者，值没变不发；歌词遮罩只监听它。
     ScopeChanged,
     /// 一次导入扫完了。`scanned` 是扫到的首数，`added` 是新入库的；重导只刷新标签，added 可为 0。
-    Imported { scanned: usize, added: usize },
+    Imported {
+        scanned: usize,
+        added: usize,
+    },
     /// 启动时的曲库缓存已经读完并合并。续播要等它，才不会在空曲库里把 resume.json 清掉。
     Loaded,
     /// 一次操作没能完成，附带的文案直接给用户看（底部提示）。
@@ -166,7 +168,6 @@ impl LibraryEntity {
     }
 
     /// 把曲库按导入顺序写盘。曲目集合变化的每个出口都要调一次；排序与播放模式不落盘。
-    /// 首屏加载完成前不写：这时内存里只有加载期间新导入的几首，写下去会把整库覆盖掉。
     fn persist(&self) {
         if self.loading {
             return;
@@ -200,7 +201,6 @@ impl LibraryEntity {
         self.playlist.sort_key()
     }
 
-    /// 数据内容代次：曲目、歌单、收藏、最近播放任一变化都会前进。派生缓存用它做键。
     pub fn data_revision(&self) -> u64 {
         self.data_revision
     }

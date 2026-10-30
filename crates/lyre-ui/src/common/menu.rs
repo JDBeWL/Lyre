@@ -96,7 +96,6 @@ pub fn artist_menu_label(first: &str, total: usize) -> String {
 
 /// 「进入专辑 / 艺术家之前」的副作用。
 type BeforeLeave = Rc<dyn Fn(&mut App)>;
-/// 「从曲库移除之后」的副作用，参数是被移除的曲目与它原来的位置。
 type AfterRemove = Rc<dyn Fn(Track, usize, &mut App)>;
 /// 「打开这个分组」的落点。
 type OnOpen = Rc<dyn Fn(&mut App)>;

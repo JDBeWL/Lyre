@@ -29,7 +29,7 @@ pub fn hero_band(seed: Option<&str>) -> impl IntoElement {
                 .h(px(HERO_PLATEAU_H))
                 .bg(tint),
         )
-        // 色带不参与命中测试靠的是「无 id、不绑事件」，gpui 没有 `pointer-events`，别给它加 `.on_click`。
+        // 色带不参与命中测试靠的是「无 id、不绑事件」：gpui 没有 `pointer-events`。
         .child(
             div()
                 .absolute()

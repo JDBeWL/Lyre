@@ -167,7 +167,6 @@ mod tests {
 
     #[test]
     fn a_partial_trailing_frame_is_dropped_rather_than_misaligned() {
-        // 6 声道的源只给 7 个样本：第一帧完整，第二帧缺一半，应当只输出一帧
         let converted = ChannelConvertSource::new(
             source(vec![0.5, -0.4, 0.2, 0.0, 0.0, 0.0, 0.9], 6),
             channels(2),

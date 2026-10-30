@@ -330,7 +330,6 @@ const TWO_COL_MIN: f32 = 760.0;
 /// 整块内容的上限宽度，再宽就居中留白。
 const CONTENT_MAX_W: f32 = 1080.0;
 
-/// 一张设置卡：分区标题在卡内顶部。
 fn card(title: &str) -> Div {
     div()
         .w_full()
@@ -546,7 +545,6 @@ fn stat_cell(label: &str, value: String) -> Div {
         )
 }
 
-/// 快捷键卡：默认收起，`open` 由调用方传入；三组并排还是排一列跟 `two_columns`。
 fn shortcuts_section(two_columns: bool, open: bool, cx: &mut Context<SettingsPanel>) -> Div {
     let chevron = if open {
         Glyph::ChevronDown

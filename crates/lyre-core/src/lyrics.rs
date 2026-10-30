@@ -76,7 +76,6 @@ enum Role {
     Translation,
 }
 
-/// 尚未配对的一行。
 struct Draft {
     start: Duration,
     /// 文件自己给的结束时刻（ASS 有，LRC 没有）

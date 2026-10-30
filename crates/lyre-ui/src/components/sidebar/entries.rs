@@ -158,7 +158,6 @@ impl SideEntry {
 }
 
 impl Sidebar {
-    /// 「你的音乐库」列什么：默认跟随主区当前区段（[`listing_for`]），被 Chip 覆盖时以 Chip 为准。
     pub(super) fn entries(&self, nav: NavSection, cx: &mut App) -> Vec<SideEntry> {
         match self.effective_listing(nav) {
             Listing::Artists => {
@@ -221,7 +220,6 @@ pub(super) fn lib_row(
 
     let thumb = row_thumb(&entry, covers, &library, cx);
     let group = SharedString::from(format!("side-row-group-{}", entry.key));
-    // 播放键与右键菜单都要用，而下面的行点击闭包会把 `library` / `entry` 搬走
     let play_title = entry.title.clone();
     let play_library = library.clone();
     let menu_library = library.clone();

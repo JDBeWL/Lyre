@@ -25,11 +25,9 @@ use crate::ring::SampleRing;
 
 /// 等协商回执的最长时间。设备被别的程序占着时初始化要重试，但也不能无限等。
 const CONFIGURE_TIMEOUT: Duration = Duration::from_secs(5);
-/// 链路上的淡入淡出时长。
 const FADE: Duration = Duration::from_millis(60);
 /// 流失联后的首次重试间隔；之后按倍数退避，避免在坏设备上来回撞。
 const RETRY_INITIAL: Duration = Duration::from_millis(250);
-/// 退避上限。
 const RETRY_MAX: Duration = Duration::from_secs(2);
 
 pub struct ExclusiveBackend {
@@ -229,11 +227,8 @@ impl ExclusiveBackend {
         }
     }
 
-    /// 把新链路接上并灌进环。
-    ///
-    /// 顺序固定：**先**用好整条链（换采样率、按 `start` 跳转、预解码），**再**一次性换手
-    /// （停旧推送线程、作废环、起新推送线程）。反过来的话，解码器打开与 seek 的耗时会直接
-    /// 变成断音：环已作废，渲染线程在写静音，新数据还要等几十毫秒才出得来。
+    /// 先备好整条链（换采样率、按 `start` 跳转、预解码），再一次性换手：停旧推送线程、作废环、起新线程。
+    /// 顺序反了，建链耗时全变成断音。
     fn rebuild(
         &mut self,
         mut decoder: TrackDecoder,

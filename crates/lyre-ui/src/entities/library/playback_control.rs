@@ -221,7 +221,6 @@ impl LibraryEntity {
         cx.notify();
     }
 
-    /// 随机按钮：设定随机轴的开 / 关。
     pub fn set_shuffle(&mut self, on: bool, cx: &mut Context<Self>) {
         if self.shuffle == on {
             return;

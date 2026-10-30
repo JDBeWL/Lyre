@@ -120,7 +120,6 @@ pub struct Playlist {
     tracks: Vec<Track>,
     #[serde(skip)]
     index: HashMap<TrackId, usize>,
-    /// 播放顺序（元素是曲目 id）
     order: Vec<TrackId>,
     /// 在 `order` 中的位置
     pos: usize,
@@ -130,7 +129,6 @@ pub struct Playlist {
     wrap_at_end: bool,
     /// 原始导入顺序，用于切回 `SortKey::ImportOrder`
     import_seq: Vec<TrackId>,
-    /// 当前排序键，只用于界面上显示「现在按什么排的」。
     sort: SortKey,
     /// 播放队列：`None` = 整个曲库。有值时是「从某个列表开始播放」那批 id，按那个列表的显示顺序，
     /// 只决定 `order` 的成分，不动 `tracks`。

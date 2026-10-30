@@ -61,7 +61,6 @@ impl BottomBar {
     }
 }
 
-/// 选中项前面加勾。
 fn mark_if(selected: bool, text: &str) -> String {
     if selected {
         format!("✓ {text}")

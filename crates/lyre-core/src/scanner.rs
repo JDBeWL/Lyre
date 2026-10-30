@@ -27,9 +27,8 @@ const ASF_HEADER_GUID: [u8; 16] = [
     0x30, 0x26, 0xB2, 0x75, 0x8E, 0x66, 0xCF, 0x11, 0xA6, 0xD9, 0x00, 0xAA, 0x00, 0x62, 0xCE, 0x6C,
 ];
 
-/// 文件头能认出来的格式。**扩展名可以随便改，魔数不会**，所以它是路由与可播性
-/// 判定的共同依据：`lyre-audio` 拿它决定交给哪个解码器，认出来的都不归通用引擎。
-///
+/// 文件头能认出来的格式。扩展名可以随便改，魔数不会，所以它是路由与可播性判定的共同依据：
+/// `lyre-audio` 拿它决定交给哪个解码器，认出来的都不归通用引擎。
 /// `head` 是文件开头至多 [`SIGNATURE_PROBE_LEN`] 字节，短于这个长度也能判。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Signature {
@@ -133,9 +132,8 @@ pub fn collect_audio_paths_with(inputs: &[PathBuf], recursive: bool) -> Vec<Path
     out
 }
 
-/// 逐首读元数据、按 `chunk` 分批回调，让 UI 先显示前一批。阻塞函数，调用方负责放到后台线程。
-/// 单首失败退化成 [`Track::fallback`]，不中断整批。
-/// 串行是刻意的：机械硬盘上并发读多个文件会互相抢磁头，没有实测数据前不要改成并行。
+/// 逐首读元数据、按 `chunk` 分批回调，让 UI 先显示前一批；阻塞函数，调用方负责放到后台线程。
+/// 单首失败退化成 [`Track::fallback`]，不中断整批；串行是刻意的，机械硬盘并发读会抢磁头。
 pub fn scan_into_tracks<F>(paths: Vec<PathBuf>, chunk: usize, mut on_chunk: F) -> usize
 where
     F: FnMut(Vec<Track>),
@@ -212,7 +210,6 @@ mod tests {
         assert!(is_audio_extension("FLAC"));
         assert!(is_audio_extension("Wma"));
         assert!(!is_decodable_extension("WMA"), "WMA 仍是唯一解不了的");
-        // 这三类现在有专门的解码器了
         assert!(is_decodable_extension("APE"));
         assert!(is_decodable_extension("Wv"));
         assert!(is_decodable_extension("Opus"));
@@ -239,7 +236,6 @@ mod tests {
             (ASF_HEADER_GUID.to_vec(), Signature::Wma),
             (ogg_opus, Signature::Opus),
         ] {
-            // 截到调用方真实读到的长度再判：用完整字节会掩盖「签名被截断」这类错。
             let read = &head[..head.len().min(SIGNATURE_PROBE_LEN)];
             assert_eq!(
                 signature_of(read),
@@ -249,7 +245,6 @@ mod tests {
         }
     }
 
-    /// 每个魔数都要有个不含歧义的显示名，错误文案直接用它。
     #[test]
     fn every_signature_has_a_label() {
         for (signature, want) in [
@@ -262,7 +257,6 @@ mod tests {
         }
     }
 
-    /// 探测长度必须盖得住最长签名：短了会把 `OpusHead` 截成 `Opus`，判据静默失效。
     #[test]
     fn the_probe_length_covers_the_longest_signature() {
         assert!(
@@ -333,8 +327,6 @@ mod tests {
         assert!(collect_audio_paths(&[PathBuf::from("/definitely/not/here")]).is_empty());
     }
 
-    /// `TrackId` 是路径哈希：带绕路的写法会让同一个文件在两次导入里变成两条，
-    /// 换个 cwd 启动还会把整个曲库误判成已删除。
     #[test]
     fn collected_paths_are_absolute_and_normalised() {
         let dir = std::env::temp_dir().join(format!("mp-scan-{}", std::process::id()));

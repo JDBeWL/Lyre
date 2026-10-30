@@ -9,7 +9,6 @@ use crate::theme;
 const BAR_W: f32 = 84.0;
 const HIT_H: f32 = 18.0;
 const TRACK_H: f32 = 4.0;
-/// 悬停 / 拖动时的轨道高度。
 const TRACK_H_ACTIVE: f32 = 6.0;
 /// 滑块的半径。轨道两端各让出这么多，见 [`ratio_in_track`]。
 const THUMB_R: f32 = 5.0;

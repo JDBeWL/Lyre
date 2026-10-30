@@ -248,7 +248,6 @@ mod tests {
     // 不写 `use super::*`：`crate::platform::*` 带进来的 gpui `test` 宏会遮蔽内置 `#[test]`
     use super::{clamp_rows, searching};
 
-    /// 两端都要夹：投影收窄后，列表可能还按旧的行数来要数据。
     #[test]
     fn clamp_rows_bounds_both_ends_without_inverting() {
         assert_eq!(clamp_rows(0..5, 10), 0..5, "在范围内时原样");

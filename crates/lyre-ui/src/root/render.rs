@@ -30,7 +30,7 @@ const KEY_CONTEXT: &str = crate::shortcuts::CONTEXT;
 const SEARCH_BROWSE_SCROLL_ID: &str = "search-browse-scroll";
 /// 拖拽导入遮罩。
 const DROP_HINT_ID: &str = "drop-hint";
-/// 遮罩淡入动画的 id，与元素 id 是两套 id 空间；字符串与 [`DROP_HINT_ID`] 相同只是巧合，不要合并。
+/// 遮罩淡入动画的 id。与 [`DROP_HINT_ID`] 属两套 id 空间，字符串相同只是巧合。
 const DROP_HINT_ANIM: &str = "drop-hint";
 
 /// 一帧渲染要从各实体读出的快照。
@@ -172,7 +172,6 @@ impl Render for RootView {
                 this.library.update(cx, LibraryEntity::focus_last);
             }))
             .on_action(cx.listener(|this, _: &PlayFocused, window, cx| {
-                // 焦点在控件上时，Enter 归那个控件
                 if control_has_focus(window, cx) {
                     return;
                 }
@@ -251,12 +250,11 @@ impl RootView {
             // 顶栏内容才能在这条整带里垂直居中。
             .px(px(theme::GUTTER))
             .gap(px(theme::GUTTER))
-            // 这里不再包圆角裁剪：外层 overflow_hidden 会把侧栏内部两块卡片的圆角一起裁平
+            // 不包圆角裁剪：外层 overflow_hidden 会把侧栏内部两块卡片的圆角一起裁平。
             .when(frame.sidebar != SidebarState::Hidden, |row| {
                 row.child(self.sidebar.clone())
             })
             .child(self.center_card(frame, cx))
-            // 浮层不占同级列，排到 `overlays` 里
             .when_some(
                 frame.right_panel.filter(|_| !frame.panel_overlay),
                 |main, tab| main.child(self.right_panel(tab)),

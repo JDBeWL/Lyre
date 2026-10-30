@@ -10,7 +10,6 @@ use crate::platform::*;
 use crate::theme;
 
 const TRACK_H: f32 = 4.0;
-/// 悬停 / 拖动时的轨道高度。
 const TRACK_H_ACTIVE: f32 = 8.0;
 /// 命中区高度：不能高到盖住底栏里上下的其它元素。
 const HIT_H: f32 = 22.0;

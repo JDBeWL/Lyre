@@ -272,7 +272,6 @@ mod tests {
         assert_eq!(list.tracks, vec![TrackId(1), TrackId(2), TrackId(3)]);
     }
 
-    /// 发号器落后于已有 id（手改过的文件）时，新建的歌单会撞上一个现存的 id。
     #[test]
     fn normalize_next_keeps_new_ids_unique() {
         let mut lists = Collections::default();

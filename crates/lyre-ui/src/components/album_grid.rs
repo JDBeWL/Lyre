@@ -26,7 +26,6 @@ const CARD_PAD: f32 = theme::GAP_MD;
 const CARD_H: f32 = COVER_H_MAX + 66.0 + CARD_PAD * 2.0;
 const ROW_H: f32 = CARD_H + GAP;
 
-/// 渲染一行卡片所需的共享依赖。
 struct RowCtx<'a> {
     library: &'a Entity<LibraryEntity>,
     covers: &'a Entity<CoverCache>,
@@ -141,7 +140,7 @@ impl AlbumGrid {
         self.shell.read(cx).grid_columns()
     }
 
-    /// 把分组切成行。封面每解码完一张就 notify 一次，重建整网格不该摊进每一帧。
+    /// 封面每解码完一张就 notify 一次，重建整网格不该摊进每一帧。
     fn rows(&mut self, cx: &mut App) -> Rc<Vec<Vec<Card>>> {
         let section = self.shell.read(cx).nav_section();
         let columns = self.columns(cx).max(1);
@@ -716,7 +715,6 @@ mod tests {
 
     #[test]
     fn long_titles_cannot_influence_card_width() {
-        // 卡宽是可用宽度的纯函数，与标题长度无关
         let longest = REPRO_TITLES
             .iter()
             .max_by_key(|t| t.chars().count())
@@ -775,7 +773,6 @@ mod tests {
                 longest.chars().count()
             );
 
-            // 同一个可用宽度重复计算必须得到同一结果：列数与卡宽同源
             let (columns_again, predicted_again) = ShellEntity::grid_metrics_for(width);
             assert_eq!(
                 (columns, predicted),

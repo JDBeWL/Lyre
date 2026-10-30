@@ -1,6 +1,5 @@
 //! 导入流程：开对话框 → 起扫描线程 → 分批读标签 → 入队。
 //! 扫描在后台线程跑，主线程每 `SCAN_FLUSH_INTERVAL` 收一批、每拍只 `notify` 一次。
-//! 线程起不来必须清掉 `scanning`，失败要走 `LibraryEvent::Failed`。
 
 use std::path::PathBuf;
 use std::sync::mpsc::{self, TryRecvError};
@@ -103,7 +102,6 @@ impl LibraryEntity {
             return;
         }
 
-        // 主线程：定期把积压的批次并进去，每拍只 notify 一次
         let task = cx.spawn(async move |this, cx| {
             // 跨轮次累计：`scanned` 数「扫到了几首」，`added` 数「其中新入库几首」；只报 `added` 的话空文件夹和全都已在库都是 0。
             let mut scanned = 0usize;

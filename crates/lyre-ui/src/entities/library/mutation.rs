@@ -66,7 +66,6 @@ impl LibraryEntity {
         cx.notify();
     }
 
-    /// 移除光标所在曲目，返回被移除的曲目与它的曲库下标（供撤销）。
     pub fn remove_focused(&mut self, cx: &mut Context<Self>) -> Option<(Track, usize)> {
         let id = self.focus?;
         self.remove(id, cx)

@@ -88,7 +88,6 @@ where
                 }
                 let short = buffer.len() < CHUNK_SAMPLES;
 
-                // 返回 0 只有两种含义：世代过期（本线程的样本已作废）或环满，都该收工
                 let written = writer.write(&buffer);
                 if written < buffer.len() {
                     if written == 0 {
@@ -256,7 +255,6 @@ mod tests {
         }
         assert_eq!(ring.backlog(), OLD, "旧世代应当已经把环灌满");
 
-        // 控制线程换手：停旧线程 → 作废 → 起新线程
         old.join();
         ring.invalidate();
         let done_new = Arc::new(AtomicU64::new(0));

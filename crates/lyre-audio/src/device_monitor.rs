@@ -54,7 +54,6 @@ impl Drop for DeviceMonitor {
 fn poll_loop(signals: &Sender<DeviceSignal>, stop: &AtomicBool) {
     let mut last = device::enumerate_output_devices();
     loop {
-        // 分片 sleep，析构时最多等一片
         for _ in 0..SLICES {
             if stop.load(Ordering::Relaxed) {
                 return;

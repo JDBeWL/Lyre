@@ -119,7 +119,6 @@ mod tests {
     fn the_two_halves_of_a_row_are_adjacent_boundaries() {
         assert_eq!(boundary_of(0, DropEdge::Above), 0);
         assert_eq!(boundary_of(0, DropEdge::Below), 1);
-        // 最后一行的下半 = 行数，也就是「排到末尾」
         assert_eq!(boundary_of(3, DropEdge::Below), 4);
         // 相邻两行的接缝报的是同一个边界，线才不会跳
         assert_eq!(

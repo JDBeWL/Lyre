@@ -39,7 +39,6 @@ impl PlaybackState {
     }
 }
 
-/// 输出模式。
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum OutputMode {
     /// 经过系统混音器（默认）。采样率与格式由混音器决定。
@@ -50,7 +49,6 @@ pub enum OutputMode {
 }
 
 impl OutputMode {
-    /// 界面上显示的名字。
     pub const fn label(self) -> &'static str {
         match self {
             Self::Shared => "共享",
@@ -83,6 +81,5 @@ pub enum PlayerEvent {
         mode: OutputMode,
         detail: String,
     },
-    /// 音频链路出错（设备打不开、文件解不了码……）。
     Error(String),
 }

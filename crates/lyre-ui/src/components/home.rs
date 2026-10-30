@@ -88,7 +88,7 @@ impl HomeView {
     ) -> Self {
         let observe_library = cx.observe(&library, |_, _, cx| cx.notify());
         let observe_shell = cx.observe(&shell, |_, _, cx| cx.notify());
-        // 不再整体 observe 封面缓存：每张图解码完成都重绘整页会让分组与排序白跑。
+        // 不整体 observe 封面缓存：每张图解码完成都重绘整页会让分组与排序白跑。
         let on_cover = cx.subscribe(&covers, |this, _, event: &CoverCacheEvent, cx| {
             let relevant = match event {
                 CoverCacheEvent::Ready(key) => this
@@ -113,7 +113,6 @@ impl HomeView {
         }
     }
 
-    /// 数据代次没变就直接复用上一帧的派生结果。
     fn sync_data(&mut self, cx: &mut App) {
         let revision = self.library.read(cx).data_revision();
         if self
@@ -171,7 +170,6 @@ impl HomeView {
         })
     }
 
-    /// 专辑分组（带缓存）。
     fn album_groups(&self, cx: &mut App) -> std::rc::Rc<Vec<AlbumGroup>> {
         App::update_entity(cx, &self.library, |library, _| library.albums())
     }

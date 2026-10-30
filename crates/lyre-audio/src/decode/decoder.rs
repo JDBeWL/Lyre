@@ -46,7 +46,6 @@ const fn buffer_samples(sample_rate: u32, channels: u16, duration_ms: u32) -> us
     }
 }
 
-/// 解码器内部的一段交错 f32 缓冲。
 struct AudioBuffer {
     samples: Vec<f32>,
     position: usize,
@@ -139,10 +138,8 @@ impl SymphoniaDecoder {
     pub fn new(path: &Path) -> Result<Self> {
         let mut file = File::open(path).map_err(AudioError::FileOpen)?;
 
-        // 魔数认得出的一律拦在探测之前。扩展名可以改，改了名的 APE / WavPack / Ogg-Opus
-        // 会被这里的探测当成能播，后果不是报错而是放出满刻度噪声或全零样本。
-        // 挡回来只是这一步的职责：把它们送进对应的解码器是 [`crate::TrackDecoder`] 的事。
-        // `initialize` 只由这里建出的实例走到，所以查这一处就够。
+        // 魔数认得出的文件在探测前拦下：改了扩展名的 APE / WavPack / Ogg-Opus 会被 symphonia 当成可播，实际输出满刻度噪声或全零。
+        // `initialize` 只由这里建出的实例调用。
         let mut head = Vec::with_capacity(lyre_core::SIGNATURE_PROBE_LEN);
         (&mut file)
             .take(lyre_core::SIGNATURE_PROBE_LEN as u64)

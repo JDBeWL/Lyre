@@ -16,7 +16,6 @@ const COVER_SIZE: f32 = theme::MINI_COVER;
 /// 用户点了迷你信息区，想去看完整信息。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MiniPlayerEvent {
-    /// 请求把右面板切到「正在播放」
     OpenNowPlaying,
 }
 

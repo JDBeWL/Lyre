@@ -2,7 +2,6 @@
 
 use lyre_core::{AlbumGroup, Track, TrackId};
 
-/// 一张首页卡片：代表曲目 + 标题 + 副标题文案。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RecentCard {
     /// 代表曲目：用它的封面，也是点击时的播放目标。

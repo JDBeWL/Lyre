@@ -69,7 +69,6 @@ mod hardware {
         silent_wav_frames(dir, sample_rate, channels, 4 * 8_000)
     }
 
-    /// 同上，但指定帧数。
     fn silent_wav_frames(
         dir: &tempfile::TempDir,
         sample_rate: u32,
@@ -105,9 +104,7 @@ mod hardware {
     }
 
     /// 真机会走完「协商独占格式 → 建链 → 推送 → 独占写设备」整条路。
-    ///
-    /// 默认忽略：它会真的占住默认输出设备。需要时单独跑：
-    /// `cargo test -p lyre-audio-exclusive -- --ignored --nocapture`
+    /// 默认忽略：它会真的占住默认输出设备；需要时跑 `cargo test -p lyre-audio-exclusive -- --ignored --nocapture`。
     #[test]
     #[ignore = "需要真实声卡，会独占默认输出设备"]
     fn the_exclusive_stream_opens_and_plays_a_silent_track() {
@@ -190,8 +187,8 @@ mod hardware {
         drop(backend);
     }
 
-    /// 反直觉的事实：**WASAPI 独占流自身也会注册音频会话**，所以音量合成器必然列出这个应用 —— 与独占有没有生效是两回事。
-    /// 独占的证据在别处：这条流开着时，别的共享流打不开这台设备（见 [`an_exclusive_stream_keeps_shared_streams_out`]）。
+    /// WASAPI 独占流自身也会注册音频会话：音量合成器列出这个应用，不能证明独占没生效。
+    /// 独占的证据是这条流开着时别的共享流打不开设备（见 [`an_exclusive_stream_keeps_shared_streams_out`]）。
     #[test]
     #[ignore = "需要真实声卡，会独占默认输出设备"]
     fn exclusive_playback_registers_a_session_of_its_own() {
@@ -248,7 +245,6 @@ mod hardware {
         );
     }
 
-    /// 等这一首自然放完。
     fn wait_finished(backend: &mut ExclusiveBackend, limit: Duration) {
         let start = std::time::Instant::now();
         while start.elapsed() < limit {
@@ -260,11 +256,8 @@ mod hardware {
         panic!("等了 {limit:?} 这一首还没放完");
     }
 
-    /// 独占下切歌不该重开流。
-    ///
-    /// 一首放完就把流停掉的话，下一首起播要重新抢占设备、重新锁时钟 —— 实测那正是接缝处
-    /// 听得见的那一下（seek 一路不停流，所以它从来不卡）。放完之后留一段宽限，下一首直接
-    /// 接在同一条还开着的流上；宽限过了还没新曲子，设备才让出去。
+    /// 独占下切歌不重开流：停流再起要重新抢占设备、锁时钟，接缝处听得见。
+    /// 放完后留 `IDLE_GRACE` 宽限，下一首接在同一条流上；宽限过了没新曲，设备才让出去。
     #[test]
     #[ignore = "需要真实声卡，会独占默认输出设备"]
     fn a_track_change_reuses_the_running_stream() {
@@ -375,8 +368,7 @@ mod hardware {
         println!("关流 1.5s 后：{:?}", our_sessions("关流后"));
     }
 
-    /// 切换设备时进度必须接着走。独占下的 `set_device` 要重建整条链路，拿链路起点
-    /// （`current.base`）重建就会把上次手动跳转之后播过的那一段全丢掉，进度条当场退回去。
+    /// 切换设备重建链路后进度必须接着走，不能退回 `current.base`。
     #[test]
     #[ignore = "需要真实声卡，会独占默认输出设备"]
     fn switching_device_keeps_the_playback_position() {

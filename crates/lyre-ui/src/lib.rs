@@ -11,13 +11,11 @@ pub mod entities;
 /// 「关注」艺术家集合与持久化。
 pub mod follows;
 pub mod icon;
-/// 图标 SVG 数据，由脚本从 Lucide 生成，不要手工编辑。
 pub mod icon_data;
 /// 曲库缓存（`library.json`）读写。
 pub mod library_store;
 /// 「喜欢」集合与持久化。
 pub mod likes;
-/// 日志初始化：把 `log` 记录落到 `<数据目录>/logs/app.log`。
 pub mod logging;
 /// 统一的 JSON 持久化层：数据目录定位、原子替换、七份 store 共用的读写语义。
 pub mod persist;

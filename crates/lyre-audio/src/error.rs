@@ -9,11 +9,9 @@ pub enum AudioError {
     #[error("无法打开音频输出设备：{0}")]
     DeviceOpen(String),
 
-    /// 打不开媒体文件。
     #[error("无法打开文件：{0}")]
     FileOpen(#[source] std::io::Error),
 
-    /// 探测容器 / 编码格式失败。
     #[error("无法识别音频格式：{0}")]
     Probe(String),
 
@@ -27,39 +25,30 @@ pub enum AudioError {
     #[error("文件里没有可解码的音频数据")]
     NoAudioData,
 
-    /// 文件里没有音频轨。
     #[error("文件里没有音频轨")]
     NoAudioTrack,
 
-    /// 缺少解码必需的能力参数（采样率 / 声道数等）。
     #[error("缺少音频编解码参数")]
     MissingCodecParams,
 
-    /// 解码器尚未初始化（内部不变量被破坏）。
     #[error("解码器尚未初始化")]
     NotInitialized,
 
-    /// 创建解码器失败。
     #[error("无法创建解码器：{0}")]
     DecoderCreate(String),
 
-    /// 读取数据包失败。
     #[error("读取数据包失败：{0}")]
     ReadPacket(String),
 
-    /// 解码失败。
     #[error("解码失败：{0}")]
     Decode(String),
 
-    /// 跳转失败。
     #[error("跳转失败：{0}")]
     Seek(String),
 
-    /// 缓冲预填充失败。
     #[error("缓冲预填充失败：{0}")]
     Prefill(String),
 
-    /// 音频线程创建失败。
     #[error("音频线程创建失败：{0}")]
     ThreadSpawn(#[source] std::io::Error),
 
@@ -69,7 +58,6 @@ pub enum AudioError {
     Exclusive(String),
 }
 
-/// 音频链路统一 `Result`。
 pub type Result<T> = std::result::Result<T, AudioError>;
 
 #[cfg(test)]

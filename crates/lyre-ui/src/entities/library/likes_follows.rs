@@ -8,7 +8,6 @@ use crate::platform::*;
 use super::{LibraryEntity, LibraryEvent};
 
 impl LibraryEntity {
-    /// 这一首是否已收藏（`O(1)`）
     pub fn is_liked(&self, id: TrackId) -> bool {
         self.liked.contains(id)
     }
@@ -26,7 +25,6 @@ impl LibraryEntity {
         now_liked
     }
 
-    /// 这位艺术家是否已关注（`O(1)`）
     pub fn is_following(&self, name: &str) -> bool {
         self.followed.contains(name)
     }

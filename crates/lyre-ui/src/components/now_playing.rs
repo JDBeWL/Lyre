@@ -466,7 +466,6 @@ fn credit_row(label: &'static str, value: &str) -> impl IntoElement {
         )
 }
 
-/// 「下一首」预告：点一下直接跳到那一首。
 fn up_next(
     next: &Track,
     covers: &Entity<CoverCache>,

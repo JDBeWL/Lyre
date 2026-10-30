@@ -173,7 +173,6 @@ pub fn group_by_album(tracks: &[Track]) -> Vec<AlbumGroup> {
             }
         });
 
-        // 专辑组多记一样东西：组内出现过的艺术家（去重，按首次出现顺序）
         if let Some(artist) = non_empty(track.artist.as_deref()) {
             if group.artists.len() >= LINEAR_DEDUP_LIMIT {
                 let seen = wide_artists
@@ -206,7 +205,6 @@ pub fn group_by_album(tracks: &[Track]) -> Vec<AlbumGroup> {
 pub fn group_by_artist(tracks: &[Track]) -> Vec<ArtistGroup> {
     let mut order: Vec<String> = Vec::new();
     let mut groups: HashMap<String, ArtistGroup> = HashMap::new();
-    // 同 `group_by_album`：名下专辑超过阈值才建哈希集合。
     let mut wide_albums: HashMap<&str, HashSet<String>> = HashMap::new();
 
     for track in tracks {
@@ -224,7 +222,6 @@ pub fn group_by_artist(tracks: &[Track]) -> Vec<ArtistGroup> {
                 }
             });
 
-            // 艺术家组多记一样东西：名下出现过的专辑（去重，按首次出现顺序）
             if let Some(album) = non_empty(track.album.as_deref()) {
                 if group.albums.len() >= LINEAR_DEDUP_LIMIT {
                     let seen = wide_albums

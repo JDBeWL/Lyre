@@ -428,7 +428,6 @@ mod tests {
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
-    /// 不同文件不能互相覆盖：合并只发生在同一个目标文件上。
     #[test]
     fn different_files_are_all_written() {
         use super::{Writer, render_compact};
@@ -464,8 +463,7 @@ mod tests {
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
-    /// 七份 store 的载荷形状对照表：顶层是不是裸数组、`TrackId` 是不是裸数字、`Collections` 有没有 `next`。
-    /// 形状一变，老用户手上的文件就读不回来了。
+    /// 七份 store 的载荷形状一变，老用户手上的文件就读不回来了。
     #[test]
     fn seven_store_payload_shapes_stay_unchanged() {
         use crate::resume::Resume;

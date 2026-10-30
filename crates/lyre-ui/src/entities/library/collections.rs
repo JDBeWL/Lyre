@@ -1,5 +1,4 @@
 //! 自建歌单：增删改、成员顺序、封面。成员是有序表，顺序由用户拖拽决定。
-//! 对外报的成员数是当前曲库里还解析得出的那几首，不是 `Collection::len()`。
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -352,16 +351,11 @@ mod tests {
     // 不写 `use super::*`：`crate::platform::*` 带进来的 gpui `test` 宏会遮蔽内置 `#[test]`
     use super::reorder_target;
 
-    /// 落点换算：`boundary` 是「插到第几行之前」，`reorder_target` 出的是「挪完之后站在第几位」。
     #[test]
     fn forward_drag_closes_the_gap_it_opens() {
-        // 四行 [a,b,c,d]，把 a 插到 c 之前（boundary=2）→ 期望 [b,a,c,d]，a 落在下标 1
         assert_eq!(reorder_target(0, 2), 1);
-        // 插到最前面不需要修正
         assert_eq!(reorder_target(3, 0), 0);
-        // 插到末尾（boundary = 行数）→ 落在最后一格
         assert_eq!(reorder_target(0, 4), 3);
-        // 把 d 插到 b 之前 → [a,d,b,c]，d 落在下标 1
         assert_eq!(reorder_target(3, 1), 1);
     }
 

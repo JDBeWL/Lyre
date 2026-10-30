@@ -98,7 +98,7 @@ impl ShellEntity {
         }
     }
 
-    // 这组只维护栈本身；作用域还算不算数由 `RootView::go_back` / `go_forward` 判断。
+    // 这组只维护栈本身；落点还原与作用域恢复由 `root::nav::navigate` 负责。
 
     /// 主区现在能不能往回退。
     pub fn can_go_back(&self) -> bool {

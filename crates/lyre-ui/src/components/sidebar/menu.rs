@@ -1,5 +1,4 @@
 //! 自建歌单的右键菜单与重命名 / 删除对话框。
-//! 输入框必须在开窗前建：它的构建器会被反复调用。
 
 use lyre_core::CollectionId;
 
@@ -113,7 +112,6 @@ fn open_delete_dialog(
     window: &mut Window,
     cx: &mut App,
 ) {
-    // 数字在开窗前算好：构建器会被反复调用
     let count = library.read(cx).collection_len(id);
     window.open_dialog(cx, move |dialog, _window, _cx| {
         let library = library.clone();

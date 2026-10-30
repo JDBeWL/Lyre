@@ -19,13 +19,11 @@ const BROWSE_MAX: usize = 12;
 /// 探索卡的最小可读宽度。再窄，卡上的专辑名只剩一个字。
 const BROWSE_TILE_MIN_W: f32 = 150.0;
 const BROWSE_TILE_H: f32 = 76.0;
-/// 每个分区块最多画几行。
 const BLOCK_MAX: usize = 4;
 const TOP_W: f32 = 320.0;
 const TOP_COVER: f32 = 120.0;
-/// 艺人 / 专辑区块行的封面边长。
 const ROW_THUMB: f32 = 36.0;
-/// 一个分组栏的最小可读宽度：再窄，栏头「艺术家」这五个字本身就要折行。
+/// 一个分组栏的最小可读宽度：再窄，栏头「艺术家」本身就要折行。
 const RESULT_COL_MIN_W: f32 = 150.0;
 /// 三个分组栏并排所需最小宽度：三栏各 `RESULT_COL_MIN_W` + 栏间两条间距。
 /// 达不到就退成单列。
@@ -123,7 +121,6 @@ impl SearchPage {
         }
     }
 
-    /// 查询词 / 可见投影 / 曲库数据都没变时，直接复用上次的搜索结果。
     fn sync_results(&mut self, query: &str, cx: &mut App) {
         let key = {
             let library = self.library.read(cx);
@@ -473,7 +470,6 @@ impl SearchPage {
             blocks.push(self.list_column(results.lists.clone(), cx));
         }
         let groups_count = blocks.len();
-        // 分组栏放得下就按命中数并排，否则单列（窄屏）。
         let groups = if group_columns(usable, groups_count) == 1 {
             div()
                 .flex_1()

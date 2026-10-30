@@ -1,5 +1,5 @@
 //! 键位的唯一来源：`lyre-app/src/keymap.rs` 的绑定与设置页的展示表都读这里，两处必须一致。
-//! 步进量也在这里 —— `RootView` 实际跳的量由这几个常量算，标签里的「5 秒」「30 秒」是手写的，靠测试钉住一致。
+//! 步进量也在这里，标签里的「5 秒」「30 秒」是手写的，必须与常量一致。
 
 /// 一条快捷键的展示信息。`keys` 用 X11 键名的写法（`ctrl-up` 这类），与 `KeyBinding::new` 一致。
 pub struct Shortcut {
@@ -258,7 +258,6 @@ mod tests {
 
     #[test]
     fn step_labels_match_the_table() {
-        // 文案里的数字是手写的，改步进量时这条会红，提醒同步 `GROUP_PLAYBACK` / `GROUP_SOUND`。
         assert_eq!(SEEK_SECONDS, 5);
         assert_eq!(SEEK_LONG_SECONDS, 30);
         assert_eq!((VOLUME_STEP * 100.0).round(), 5.0);

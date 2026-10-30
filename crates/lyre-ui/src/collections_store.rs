@@ -13,7 +13,6 @@ pub fn load() -> Collections {
     collections
 }
 
-/// 写回磁盘。失败只记日志 —— 数据目录只读不该让播放器用不了。
 pub fn save(collections: Collections) {
     persist::save_lossy(FILE, collections);
 }
@@ -39,14 +38,12 @@ mod tests {
         assert_eq!(back.create("二").expect("建二").id, CollectionId(1));
     }
 
-    /// 坏文件退空集，不能 panic。
     #[test]
     fn 读不懂就当没有歌单() {
         let parsed: Collections = serde_json::from_str("这不是 JSON").unwrap_or_default();
         assert!(parsed.is_empty());
     }
 
-    /// 缺字段的新格式也要能读。
     #[test]
     fn 空对象退成默认集() {
         let parsed: Collections = serde_json::from_str("{}").expect("空对象应当可读");
